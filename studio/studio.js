@@ -233,7 +233,8 @@ Respond with ONLY valid JSON (no markdown fences), shaped exactly like:
                   { role: 'user', content: prompt }
                 ],
                 temperature: 0.4,
-                max_tokens: 4000
+                max_tokens: 4000,
+                response_format: { type: 'json_object' }
               })
             });
             if (!llmRes.ok) {
