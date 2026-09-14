@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "TourPack — Reusable Tour Overlay",
+  "version": "1.0.0",
+  "description": "Injects a config-driven interactive tour overlay into any page. Edit tour-config.js to change the tour.",
+  "permissions": ["storage", "activeTab"],
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["tour-config.js", "tour-overlay.js"],
+      "css": ["tour-overlay.css"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "tourpack@example.invalid"
+    }
+  }
+}
