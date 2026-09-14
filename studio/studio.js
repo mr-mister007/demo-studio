@@ -117,6 +117,35 @@ function injectAssets(html) {
 }
 
 // ── HTTP server: proxy + studio ───────────────────────────────
+// ── JSON repair for LLM outputs ──────────────────────────────
+function repairJson(s) {
+  // Remove trailing commas before } or ]
+  s = s.replace(/,\s*([}\]])/g, '$1');
+  // Remove unescaped newlines inside string values
+  s = s.replace(/"([^"]*)\n([^"]*)"/g, (m, a, b) => '"' + a.replace(/\n/g, ' ').replace(/\r/g, ' ') + b.replace(/\n/g, ' ').replace(/\r/g, ' ') + '"');
+  // Stack-based tracking of open structures (preserves nesting order)
+  const stack = [];
+  let inStr = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c === '"' && (i === 0 || s[i-1] !== '\\')) inStr = !inStr;
+    if (inStr) continue;
+    if (c === '{' || c === '[') stack.push(c);
+    else if (c === '}' || c === ']') {
+      const expected = c === '}' ? '{' : '[';
+      if (stack[stack.length-1] === expected) stack.pop();
+    }
+  }
+  // Close unclosed strings
+  if (inStr) s += '"';
+  // Close unclosed structures in reverse nesting order
+  while (stack.length) {
+    const open = stack.pop();
+    s += open === '{' ? '}' : ']';
+  }
+  return s;
+}
+
 const server = http.createServer((req, res) => {
   const url = req.url.split('?')[0];
 
@@ -230,7 +259,22 @@ Respond with ONLY valid JSON (no markdown fences), shaped exactly like:
         const start = cleaned.indexOf('{');
         const end = cleaned.lastIndexOf('}');
         if (start < 0 || end < 0) return sendJSON(res, { ok: false, error: 'LLM returned non-JSON: ' + cleaned.slice(0, 200) }, 502);
-        const cfg = JSON.parse(cleaned.slice(start, end + 1));
+        let jsonStr = cleaned.slice(start, end + 1);
+
+        // Attempt parse, with repair on failure
+        let cfg;
+        try {
+          cfg = JSON.parse(jsonStr);
+        } catch (firstErr) {
+          // Repair common LLM JSON issues
+          try {
+            cfg = JSON.parse(repairJson(jsonStr));
+          } catch (secondErr) {
+            console.error('[AI] JSON parse failed after repair:', secondErr.message, 'at pos', secondErr.message.match(/position (\d+)/)?.[1]);
+            console.error('[AI] raw tail (last 300 chars):', jsonStr.slice(-300));
+            return sendJSON(res, { ok: false, error: 'AI returned invalid JSON (' + firstErr.message.slice(0, 60) + ')' }, 502);
+          }
+        }
 
         // Sanitize / validate shape
         if (!cfg.chapters || !Array.isArray(cfg.chapters)) return sendJSON(res, { ok: false, error: 'LLM config missing chapters' }, 502);

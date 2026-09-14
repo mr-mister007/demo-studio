@@ -350,10 +350,11 @@
   function collectDomInventory(max = 120) {
     const out = [];
     const seen = new Set();
-    const interesting = ['BUTTON', 'A', 'NAV', 'INPUT', 'SELECT', 'TEXTAREA', 'H1', 'H2', 'H3', 'LI', 'IMG', 'FORM', 'TABLE', '[role]'];
-    const all = document.querySelectorAll('button, a, nav, input, select, textarea, h1, h2, h3, li, img, form, [role], [data-testid], [aria-label]');
+    const all = document.querySelectorAll('button, a, nav, input, select, textarea, h1, h2, h3, h4, li, img, form, [role], [data-testid], [aria-label]');
     for (const el of all) {
       if (out.length >= max) break;
+      // Skip TourPack's own UI elements (studio panel, tour overlay, modals)
+      if (el.closest('#tourpack-studio, #tourpack-overlay, [id^="tourpack-"], [id^="studio-"]')) continue;
       const tag = el.tagName.toLowerCase();
       if (tag === 'li' && el.querySelector('a')) continue; // skip nested li>a dupes
       const text = (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 60);
