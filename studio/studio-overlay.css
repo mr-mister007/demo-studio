@@ -89,6 +89,9 @@
 }
 .studio-btn:hover { border-color: var(--st-accent); }
 .studio-btn.on { background: var(--st-accent); border-color: var(--st-accent); color: #fff; }
+.studio-ai { border-color: #7c3aed; color: #c4b5fd; }
+.studio-ai:hover { background: rgba(124,58,237,.15); border-color: #8b5cf6; }
+.studio-ai:disabled { opacity: .5; cursor: wait; }
 .studio-primary { background: var(--st-accent); border-color: var(--st-accent); color: #fff; }
 .studio-primary:hover { background: #2563eb; }
 .studio-pick.on { animation: stPulse 1.5s ease-in-out infinite; }

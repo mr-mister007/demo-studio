@@ -45,6 +45,7 @@
       </div>
       <div class="studio-toolbar">
         <button id="studio-pick" class="studio-btn studio-pick">🎯 Pick element</button>
+        <button id="studio-ai" class="studio-btn studio-ai">✨ AI Generate</button>
         <button id="studio-preview" class="studio-btn">▶ Preview</button>
         <button id="studio-save" class="studio-btn studio-primary">💾 Save</button>
         <button id="studio-export" class="studio-btn">⤓ Config</button>
@@ -116,31 +117,33 @@
   // ── Selector generation (robust CSS) ─────────────────────────
   function selectorFor(el) {
     if (!el || el === document.body || el === document.documentElement) return null;
-    // 1) id
+    // 1) unique id
     if (el.id && /^[A-Za-z][\w:.-]*$/.test(el.id)) {
       const s = '#' + CSS.escape(el.id);
       if (document.querySelectorAll(s).length === 1) return s;
     }
-    // 2) text-based for buttons/links/nav (human-readable)
-    const txt = (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 60);
-    if (txt && (el.tagName === 'BUTTON' || el.tagName === 'A' || el.tagName === 'NAV' ||
-                el.getAttribute('role') === 'button' || el.tagName === 'LI')) {
-      const tag = el.tagName.toLowerCase();
-      const base = tag + ':has-text("' + txt.replace(/"/g, '\\"') + '")';
-      // prefer scoped: tag.class:has-text
-      const cls = el.className && typeof el.className === 'string' ? el.className.split(/\s+/).filter(Boolean).slice(0, 1)[0] : '';
-      const scoped = cls ? tag + '.' + CSS.escape(cls) + ':has-text("' + txt.replace(/"/g, '\\"') + '")' : base;
-      // Only use text selector if it resolves uniquely
-      try { if (document.querySelectorAll(base).length === 1) return base; } catch (e) {}
-      try { if (document.querySelectorAll(scoped).length === 1) return scoped; } catch (e) {}
-    }
-    // 3) class chain
+    // 2) class chain (real CSS — no :has-text)
     const cls = el.className && typeof el.className === 'string' ? el.className.split(/\s+/).filter(Boolean).slice(0, 2) : [];
     if (cls.length) {
       const s = el.tagName.toLowerCase() + cls.map(c => '.' + CSS.escape(c)).join('');
       try { if (document.querySelectorAll(s).length === 1) return s; } catch (e) {}
     }
-    // 4) nth-child path (last resort)
+    // 3) unique aria-label attribute
+    const label = el.getAttribute('aria-label');
+    if (label) {
+      const s = el.tagName.toLowerCase() + '[aria-label="' + CSS.escape(label) + '"]';
+      try { if (document.querySelectorAll(s).length === 1) return s; } catch (e) {}
+    }
+    // 4) unique type+name for inputs
+    if (el.tagName === 'INPUT' && el.type && el.name) {
+      const s = 'input[type="' + el.type + '"][name="' + CSS.escape(el.name) + '"]';
+      try { if (document.querySelectorAll(s).length === 1) return s; } catch (e) {}
+    }
+    if (el.tagName === 'INPUT' && el.type) {
+      const s = 'input[type="' + el.type + '"]';
+      try { if (document.querySelectorAll(s).length === 1) return s; } catch (e) {}
+    }
+    // 5) nth-child path (last resort)
     let parts = [];
     let node = el;
     while (node && node !== document.body && parts.length < 5) {
@@ -155,6 +158,9 @@
     try { if (document.querySelectorAll(fallback).length === 1) return fallback; } catch (e) {}
     return fallback || null;
   }
+
+  // Expose selectorFor for the AI DOM scanner
+  window.__studioSelectorFor = selectorFor;
 
   // ── Pick mode ────────────────────────────────────────────────
   function setPick(on) {
@@ -337,6 +343,82 @@
       }
     } catch (e) {
       flash('Save failed (server not reachable): ' + e.message);
+    }
+  }
+
+  // ── AI tour generation ──────────────────────────────────────
+  function collectDomInventory(max = 120) {
+    const out = [];
+    const seen = new Set();
+    const interesting = ['BUTTON', 'A', 'NAV', 'INPUT', 'SELECT', 'TEXTAREA', 'H1', 'H2', 'H3', 'LI', 'IMG', 'FORM', 'TABLE', '[role]'];
+    const all = document.querySelectorAll('button, a, nav, input, select, textarea, h1, h2, h3, li, img, form, [role], [data-testid], [aria-label]');
+    for (const el of all) {
+      if (out.length >= max) break;
+      const tag = el.tagName.toLowerCase();
+      if (tag === 'li' && el.querySelector('a')) continue; // skip nested li>a dupes
+      const text = (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 60);
+      const label = el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('alt') || '';
+      const role = el.getAttribute('role') || '';
+      const title = el.getAttribute('title') || '';
+      if (!text && !label && !role && !title) continue;
+      if (text.length < 2 && !label) continue;
+      const sel = (() => {
+        try {
+          const s = window.__studioSelectorFor ? window.__studioSelectorFor(el) : null;
+          return s;
+        } catch (e) { return null; }
+      })();
+      if (!sel) continue;
+      const key = sel;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({
+        tag: tag.toUpperCase(),
+        text: (text || label || title || '').slice(0, 60),
+        role: role,
+        sel: sel
+      });
+    }
+    return out;
+  }
+
+  async function aiGenerate() {
+    const btn = document.querySelector('#studio-ai');
+    btn.disabled = true;
+    const orig = btn.textContent;
+    flash('✨ Analyzing page…');
+    try {
+      const dom = collectDomInventory();
+      if (!dom.length) { flash('No interactive elements found on this page'); return; }
+      flash('✨ Asking AI to design tour (' + dom.length + ' elements)…');
+
+      const res = await fetch('/__tour/studio/ai-generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          dom: dom.slice(0, 120),
+          url: location.href,
+          appName: document.title || cfg.appName || 'My App'
+        })
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || 'AI generate failed');
+      if (!data.config || !data.config.chapters || !data.config.chapters.length) {
+        throw new Error('AI returned empty tour');
+      }
+
+      // Load generated tour into the editor
+      cfg = data.config;
+      dirty = true;
+      try { localStorage.setItem(LS_KEY, JSON.stringify(cfg)); } catch (e) {}
+      renderChapters();
+      const steps = data.config.chapters.reduce((a, c) => a + (c.steps || []).length, 0);
+      flash('✨ AI generated ' + data.config.chapters.length + ' chapters / ' + steps + ' steps ✓');
+    } catch (e) {
+      flash('✗ AI failed: ' + e.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = orig;
     }
   }
 
@@ -698,6 +780,7 @@ window.__TOUR_CONFIG = ${JSON.stringify(c, null, 2)};
 
   // ── Wire up ──────────────────────────────────────────────────
   document.querySelector('#studio-pick').addEventListener('click', () => setPick(!pickMode));
+  document.querySelector('#studio-ai').addEventListener('click', aiGenerate);
   document.querySelector('#studio-preview').addEventListener('click', preview);
   document.querySelector('#studio-save').addEventListener('click', save);
   document.querySelector('#studio-export').addEventListener('click', exportCfg);

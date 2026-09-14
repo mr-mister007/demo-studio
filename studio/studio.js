@@ -19,6 +19,19 @@ const zlib = require('zlib');
 const fs = require('fs');
 const path = require('path');
 
+// ── AI (OpenRouter) config — reads key from ~/.atlas/atlas.yaml ─
+let AI_KEY = null;
+const AI_MODELS = ['liquid/lfm-2.5-2.6b:free', 'dots-studio/dots-3-note-preview:free', 'nvidia/nemotron-3.5-lightning:free'];
+let AI_MODEL = AI_MODELS[0];
+let AI_PROVIDER = 'openrouter';
+try {
+  const atlas = fs.readFileSync(path.join(process.env.HOME, '.atlas', 'atlas.yaml'), 'utf8');
+  const k = atlas.match(/api_key:\s*["']?([^"'\s]+)/);
+  if (k) AI_KEY = k[1].trim();
+} catch (e) { /* no atlas.yaml — AI button will report missing key */ }
+
+const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
+
 const args = process.argv.slice(2);
 function arg(name, def) { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : def; }
 
@@ -142,6 +155,99 @@ const server = http.createServer((req, res) => {
         const steps = (cfg.chapters || []).reduce((a, c) => a + (c.steps || []).length, 0);
         sendJSON(res, { ok: true, path: OUT_PATH, steps });
       } catch (e) { sendJSON(res, { ok: false, error: e.message }, 400); }
+    });
+    return;
+  }
+
+  // ── AI tour generation ────────────────────────────────────────
+  if (url === ROUTE + 'studio/ai-generate' && req.method === 'POST') {
+    let body = '';
+    req.on('data', c => body += c);
+    req.on('end', async () => {
+      try {
+        const { dom, url: targetUrl, appName } = JSON.parse(body);
+        if (!AI_KEY) return sendJSON(res, { ok: false, error: 'No OpenRouter key found in ~/.atlas/atlas.yaml' }, 400);
+
+        const sample = (dom || []).slice(0, 120);
+        const prompt = `You are a UX onboarding expert. Analyze this DOM inventory of the web app "${appName || targetUrl || 'the app'}" and design a 3-6 chapter interactive tour (coach marks). 
+
+DOM INVENTORY (tag | text | role | css selector):
+${sample.map(d => `- ${d.tag} | ${d.text || ''} | ${d.role || ''} | ${d.sel}`).join('\n')}
+
+Rules:
+- Tour must teach the user the app's key features/actions using real elements.
+- 1-4 steps per chapter; each step target a specific element from the inventory.
+- Titles concise (max 50 chars), bodies instructive (max 180 chars).
+- "sel" MUST be an exact selector from the inventory (copy it verbatim).
+- "pos" = top|bottom|left|right|center.
+- accent: pick a nice hex color.
+
+Respond with ONLY valid JSON (no markdown fences), shaped exactly like:
+{"appName":"...","launchTitle":"...","launchBody":"...","startLabel":"Start tour","dismissLabel":"Explore on my own","accent":"#...","chapters":[{"title":"...","steps":[{"title":"...","body":"...","sel":"...","pos":"bottom","action":false}]}]}`;
+
+        let llmRes, data, msg, raw = null;
+        for (let attempt = 0; attempt < AI_MODELS.length; attempt++) {
+          const model = AI_MODELS[attempt];
+          try {
+            llmRes = await fetch(OPENROUTER_URL, {
+              method: 'POST',
+              headers: {
+                'Authorization': 'Bearer ' + AI_KEY,
+                'Content-Type': 'application/json',
+                'HTTP-Referer': 'http://localhost:8940',
+                'X-Title': 'TourPack Studio'
+              },
+              body: JSON.stringify({
+                model,
+                messages: [
+                  { role: 'system', content: 'You generate tour definitions as strict JSON. Never wrap in fences.' },
+                  { role: 'user', content: prompt }
+                ],
+                temperature: 0.4,
+                max_tokens: 4000
+              })
+            });
+            if (!llmRes.ok) {
+              const t = await llmRes.text();
+              console.error('[AI] attempt ' + attempt + ' model ' + model + ' → ' + llmRes.status + ': ' + t.slice(0, 120));
+              if (llmRes.status === 429 || llmRes.status >= 500) continue; // rate-limited/upstream → try next
+              return sendJSON(res, { ok: false, error: 'LLM API ' + llmRes.status + ': ' + t.slice(0, 200) }, 502);
+            }
+            data = await llmRes.json();
+            msg = data.choices && data.choices[0] && data.choices[0].message;
+            raw = msg && msg.content;
+            if (raw) { AI_MODEL = model; break; }
+            console.error('[AI] attempt ' + attempt + ' model ' + model + ' empty content. finish:', data.choices && data.choices[0] && data.choices[0].finish_reason, '| reasoning:', msg && msg.reasoning ? (msg.reasoning.length + ' chars') : 'none');
+          } catch (e) {
+            console.error('[AI] attempt ' + attempt + ' model ' + model + ' threw: ' + e.message);
+          }
+        }
+        if (!raw) return sendJSON(res, { ok: false, error: 'All AI models returned empty responses (rate-limited or reasoning-only). Retry in a moment.' }, 502);
+
+        // Strip markdown fences if present
+        const cleaned = raw.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+        // Find first { ... } block
+        const start = cleaned.indexOf('{');
+        const end = cleaned.lastIndexOf('}');
+        if (start < 0 || end < 0) return sendJSON(res, { ok: false, error: 'LLM returned non-JSON: ' + cleaned.slice(0, 200) }, 502);
+        const cfg = JSON.parse(cleaned.slice(start, end + 1));
+
+        // Sanitize / validate shape
+        if (!cfg.chapters || !Array.isArray(cfg.chapters)) return sendJSON(res, { ok: false, error: 'LLM config missing chapters' }, 502);
+        cfg.chapters = cfg.chapters.slice(0, 8).map(ch => ({
+          title: String(ch.title || 'Chapter').slice(0, 80),
+          steps: (ch.steps || []).slice(0, 6).map(s => ({
+            title: String(s.title || 'Step').slice(0, 50),
+            body: String(s.body || '').slice(0, 200),
+            sel: String(s.sel || '').slice(0, 300),
+            pos: ['top', 'bottom', 'left', 'right', 'center'].includes(s.pos) ? s.pos : 'bottom',
+            action: !!s.action
+          }))
+        }));
+        if (!cfg.appName) cfg.appName = appName || 'My App';
+
+        sendJSON(res, { ok: true, config: cfg, model: AI_MODEL });
+      } catch (e) { sendJSON(res, { ok: false, error: e.message }, 500); }
     });
     return;
   }
