@@ -8,10 +8,8 @@
      • previews the demo live, saves config JSON to the server
    ════════════════════════════════════════════════════════════════ */
 (() => {
-  if (window.__demoStudioLoaded) return;
-  window.__demoStudioLoaded = true;
-
-  // ── State ────────────────────────────────────────────────────
+  if (window.__demoStudioStudioLoaded) return;
+  window.__demoStudioStudioLoaded = true;
   const LS_KEY = 'demostudio_studio_draft';
   let cfg = null;                    // current working config
   let pickMode = false;
