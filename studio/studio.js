@@ -21,16 +21,16 @@ const path = require('path');
 
 // ── AI (OpenRouter) config — reads key from ~/.atlas/atlas.yaml ─
 let AI_KEY = null;
-// Use stronger models that follow instructions better; free-tier but more capable
-// Check OpenRouter for current free models - updated from live API
-// Note: many "free" models have rate limits or are temporarily unavailable
+// Verified working free models (live-tested against OpenRouter API, 2026-09-15):
+//   - JSON mode support confirmed
+//   - Rate-limit/404 models excluded (gemma-4*, llama-3.3*, qwen-72b, phi-4 all dead/limited)
 const AI_MODELS = [
-  'nvidia/nemotron-3.5-lightning:free',
-  'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
-  'thinkingmachines/inkling:free',
+  'openrouter/free',                       // router picks best free model — most reliable
+  'poolside/laguna-s-2.1:free',            // strong instruction following
+  'nex-agi/nex-n2.5-pro:free',
   'cohere/north-mini-code:free',
-  'dots-studio/dots-3-note-preview:free',
-  'liquid/lfm-2.5-2.6b:free'
+  'liquid/lfm-2.5-2.6b:free',
+  'dots-studio/dots-3-note-preview:free'   // long-context fallback
 ];
 let AI_MODEL = AI_MODELS[0];
 let AI_PROVIDER = 'openrouter';
@@ -219,24 +219,27 @@ const server = http.createServer((req, res) => {
         const exampleTag = sample[0]?.tag || 'BUTTON';
         const appTitle = sample.find(d => d.tag === 'H1' || d.tag === 'H2' || d.tag === 'H3')?.text || (appName || targetUrl || 'the app');
         
-        const prompt = `You are a UX onboarding expert. Create a tour for "${appName || targetUrl || 'the app'}" using ONLY the elements below.
+        const prompt = `You are a UX onboarding expert. Create an interactive DEMO for "${appName || targetUrl || 'the app'}" using the elements below.
+
+🎯 GOAL: Create a COMPLETE demo that walks through the app's main screens and actions. Use AS MANY elements as possible — every major interactive element in the inventory should appear in at least one step. A 1-step demo is a FAILURE; aim for 5-15 steps covering the key journey.
 
 ⚠️ CRITICAL RULES — VIOLATION MEANS YOUR OUTPUT WILL BE REJECTED:
 1. EVERY step's "sel" MUST BE AN EXACT COPY of a selector from the inventory below. NO exceptions, NO modifications, NO inventions.
 2. If an element is NOT in the inventory, you CANNOT reference it — do not hallucinate selectors.
 3. Chapter titles and step titles must describe the ACTUAL element text/role from the inventory.
-4. Maximum 4 steps per chapter, maximum 6 chapters.
-5. Output ONLY valid JSON (no markdown, no extra text, no explanations, no reasoning, no thinking process).
+4. Group steps into logical chapters (1-4 chapters). Each chapter should have 2-6 steps.
+5. The FIRST step should introduce the app's main entry point (hero CTA, logo, or main nav). 
+6. Output ONLY valid JSON (no markdown, no extra text, no explanations, no reasoning, no thinking process).
 
 DOM INVENTORY (tag | text | role | css selector — copy sel EXACTLY):
 ${inventoryLines}
 
-Output JSON shaped EXACTLY:
+Output JSON shaped EXACTLY (use DEMO wording, not tour):
 {
   "appName": "${appTitle}",
   "launchTitle": "Welcome to ${appTitle}",
   "launchBody": "Let me show you the key features.",
-  "startLabel": "Start tour",
+  "startLabel": "Start demo",
   "dismissLabel": "Explore on my own",
   "accent": "#3b82f6",
   "chapters": [
@@ -255,12 +258,18 @@ Output JSON shaped EXACTLY:
   ]
 }
 
-IMPORTANT: The example above uses "${exampleSel}" from the inventory. Your output MUST use ONLY selectors from the inventory above. Every "sel" value must be an EXACT match to one of the selectors listed. Do NOT use the example selector "${exampleSel}" unless it appears in the inventory above.`;
+IMPORTANT: 
+- The example above uses "${exampleSel}" from the inventory. Use ONLY selectors from the inventory above — every "sel" value must be an EXACT match to one of the selectors listed.
+- Expand the example into a full demo: multiple chapters and steps, each using a DIFFERENT element from the inventory.
+- MINIMUM 5 steps total. Cover the key elements: buttons, links, nav, inputs, headings, images.
+- If the inventory has few elements, still use every single one.`;
 
         let llmRes, data, msg, raw = null;
         for (let attempt = 0; attempt < AI_MODELS.length; attempt++) {
           const model = AI_MODELS[attempt];
           try {
+            const ctrl = new AbortController();
+            const timer = setTimeout(() => ctrl.abort(), 45000); // 45s per model
             llmRes = await fetch(OPENROUTER_URL, {
               method: 'POST',
               headers: {
@@ -272,18 +281,20 @@ IMPORTANT: The example above uses "${exampleSel}" from the inventory. Your outpu
               body: JSON.stringify({
                 model,
                 messages: [
-                  { role: 'system', content: 'You generate tour definitions as strict JSON. Never wrap in fences.' },
+                  { role: 'system', content: 'You generate interactive demo definitions as strict JSON. Never wrap in fences. Use DEMO terminology ("Start demo", "demo"), never "tour".' },
                   { role: 'user', content: prompt }
                 ],
                 temperature: 0.4,
                 max_tokens: 4000,
                 response_format: { type: 'json_object' }
-              })
+              }),
+              signal: ctrl.signal
             });
+            clearTimeout(timer);
             if (!llmRes.ok) {
               const t = await llmRes.text();
               console.error('[AI] attempt ' + attempt + ' model ' + model + ' → ' + llmRes.status + ': ' + t.slice(0, 120));
-              if (llmRes.status === 429 || llmRes.status >= 500) continue; // rate-limited/upstream → try next
+              if (llmRes.status === 429 || llmRes.status >= 500 || llmRes.status === 404) continue; // rate-limited/unavailable → try next
               return sendJSON(res, { ok: false, error: 'LLM API ' + llmRes.status + ': ' + t.slice(0, 200) }, 502);
             }
             data = await llmRes.json();
@@ -293,6 +304,7 @@ IMPORTANT: The example above uses "${exampleSel}" from the inventory. Your outpu
             console.error('[AI] attempt ' + attempt + ' model ' + model + ' empty content. finish:', data.choices && data.choices[0] && data.choices[0].finish_reason, '| reasoning:', msg && msg.reasoning ? (msg.reasoning.length + ' chars') : 'none');
           } catch (e) {
             console.error('[AI] attempt ' + attempt + ' model ' + model + ' threw: ' + e.message);
+            if (e.name === 'AbortError') console.error('[AI]   (timed out after 45s, trying next model)');
           }
         }
         if (!raw) return sendJSON(res, { ok: false, error: 'All AI models returned empty responses (rate-limited or reasoning-only). Retry in a moment.' }, 502);

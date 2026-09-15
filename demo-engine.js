@@ -1,6 +1,6 @@
 /* ═══════════════════════════════════════════════════════════════
-   DemoStudio Engine v2 — reusable zero-code-modification tour overlay
-   Reads EVERYTHING from window.__TOUR_CONFIG (set by tour-config.js).
+   DemoStudio Engine v2 — reusable zero-code-modification demo overlay
+   Reads EVERYTHING from window.__TOUR_CONFIG (set by demo-config.js).
    v2 adds: DemoStudio.reload(cfg), DemoStudio.find(sel) — used by Studio.
    Drop into ANY app via: proxy injection / browser extension / bookmarklet.
    ═══════════════════════════════════════════════════════════════ */
@@ -15,23 +15,23 @@
     return {
       accent: c.accent || '#3b82f6',
       appName: c.appName || 'This app',
-      tourName: c.tourName || 'Tour',
-      launchTitle: c.launchTitle || 'Take a 2-minute tour',
+      demoName: c.demoName || 'Demo',
+      launchTitle: c.launchTitle || 'Take a 2-minute demo',
       launchBody: c.launchBody || 'See how this app works — step by step, with interactive highlights.',
-      startLabel: c.startLabel || 'Start tour',
+      startLabel: c.startLabel || 'Start demo',
       dismissLabel: c.dismissLabel || 'Explore on my own',
-      skipLabel: c.skipLabel || 'Skip tour',
+      skipLabel: c.skipLabel || 'Skip demo',
       nextLabel: c.nextLabel || 'Next →',
       backLabel: c.backLabel || '← Back',
       finishLabel: c.finishLabel || 'Finish',
       clickHint: c.clickHint || 'Click the highlighted element above ↑',
       autoDelay: c.autoDelay ?? 1500,          // ms before launch modal shows
-      idleAutoStart: c.idleAutoStart ?? false, // auto-start tour after delay?
+      idleAutoStart: c.idleAutoStart ?? false, // auto-start demo after delay?
       storageKey: c.storageKey || 'demostudio_seen',
       showOnce: c.showOnce ?? false,           // remember dismissal in localStorage?
       disableOnPaths: c.disableOnPaths || [],
       onlyOnPaths: c.onlyOnPaths || null,
-      chapters: c.chapters || c.tour || []
+      chapters: c.chapters || c.demo || []
     };
   }
 

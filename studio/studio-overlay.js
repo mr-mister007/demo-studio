@@ -1,11 +1,11 @@
 /* ═══════════════════════════════════════════════════════════════
-   DemoStudio Studio — click-to-build tour overlay editor.
+   DemoStudio Studio — click-to-build demo overlay editor.
    Injected by the studio proxy into the target app. It:
      • shows a floating toolbar (pick / preview / save / export)
      • PICK mode: hover+click any real element → creates a step
        targeting it (computes a robust CSS selector automatically)
      • lets you edit title/body/position/action per step
-     • previews the tour live, saves config JSON to the server
+     • previews the demo live, saves config JSON to the server
    ═══════════════════════════════════════════════════════════════ */
 (() => {
   if (window.__tourStudioLoaded) return;
@@ -368,23 +368,25 @@
     }
   }
 
-  // ── AI tour generation ──────────────────────────────────────
-  function collectDomInventory(max = 120) {
+  // ── AI demo generation ──────────────────────────────────────
+  function collectDomInventory(max = 150) {
     const out = [];
     const seen = new Set();
-    const all = document.querySelectorAll('button, a, nav, input, select, textarea, h1, h2, h3, h4, li, img, form, [role], [data-testid], [aria-label]');
+    const all = document.querySelectorAll('button, a, nav, input, select, textarea, h1, h2, h3, h4, h5, h6, li, img, form, [role], [data-testid], [aria-label], [class*="btn"], [class*="button"], [class*="nav"], [class*="menu"], [class*="header"], [class*="logo"], [class*="sidebar"], [class*="card"], [class*="tab"], [class*="icon"]');
     for (const el of all) {
       if (out.length >= max) break;
-      // Skip DemoStudio's own UI elements (studio panel, tour overlay, modals)
+      // Skip DemoStudio's own UI elements (studio panel, demo overlay, modals)
       if (el.closest('#demostudio-studio, #demostudio-overlay, [id^="demostudio-"], [id^="studio-"]')) continue;
       const tag = el.tagName.toLowerCase();
       if (tag === 'li' && el.querySelector('a')) continue; // skip nested li>a dupes
-      const text = (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 60);
-      const label = el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('alt') || '';
+      if (tag === 'svg' || tag === 'path') continue;
+      const text = (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80);
+      const label = el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('alt') || el.getAttribute('title') || '';
       const role = el.getAttribute('role') || '';
-      const title = el.getAttribute('title') || '';
-      if (!text && !label && !role && !title) continue;
-      if (text.length < 2 && !label) continue;
+      const cls = (el.className && typeof el.className === 'string') ? el.className : '';
+      const btnText = (tag === 'button' && text) ? text : '';
+      if (!text && !label && !role && !cls) continue;
+      if (text.length < 2 && !label && !role && !cls) continue;
       const sel = (() => {
         try {
           const s = window.__studioSelectorFor ? window.__studioSelectorFor(el) : null;
@@ -397,7 +399,7 @@
       seen.add(key);
       out.push({
         tag: tag.toUpperCase(),
-        text: (text || label || title || '').slice(0, 60),
+        text: ((text || label || '').slice(0, 60) || cls.slice(0, 40)),
         role: role,
         sel: sel
       });
@@ -413,7 +415,7 @@
     try {
       const dom = collectDomInventory();
       if (!dom.length) { flash('No interactive elements found on this page'); return; }
-      flash('✨ Asking AI to design tour (' + dom.length + ' elements)…');
+      flash('✨ Asking AI to design demo (' + dom.length + ' elements)…');
       // Debug: log what we're sending
       console.log('[Studio] DOM inventory collected (' + dom.length + ' elements):');
       dom.slice(0, 15).forEach(d => console.log('[Studio]  ', d.sel, '|', d.tag, '|', d.text));
@@ -431,10 +433,10 @@
       const data = await res.json();
       if (!data.ok) throw new Error(data.error || 'AI generate failed');
       if (!data.config || !data.config.chapters || !data.config.chapters.length) {
-        throw new Error('AI returned empty tour');
+        throw new Error('AI returned empty demo');
       }
 
-      // Load generated tour into the editor
+      // Load generated demo into the editor
       cfg = data.config;
       dirty = true;
       try { localStorage.setItem(LS_KEY, JSON.stringify(cfg)); } catch (e) {}
@@ -495,7 +497,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${escH(c.appName || 'Tour')} — Tour</title>
+<title>${escH(c.appName || 'Demo')} — Tour</title>
 <style>
   :root { --accent: ${accent}; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -530,7 +532,7 @@
 <body>
 <div class="wrap">
   <header class="hero">
-    <h1>${escH(c.appName || 'Tour')}</h1>
+    <h1>${escH(c.appName || 'Demo')}</h1>
     <p class="sub">${escH(c.launchTitle || '')}${c.launchBody ? ' — ' + escH(c.launchBody) : ''}</p>
     <div class="meta">
       <span class="pill"><b>${(c.chapters || []).length}</b> chapters</span>
@@ -539,7 +541,7 @@
     </div>
   </header>
   ${chaptersHtml}
-  <p class="hint">Generated by DemoStudio Studio — open this file in any browser to share the tour.</p>
+  <p class="hint">Generated by DemoStudio Studio — open this file in any browser to share the demo.</p>
 </div>
 <script>
 function toggleCh(el){ el.closest('.chapter').classList.toggle('open'); }
@@ -551,10 +553,10 @@ document.querySelectorAll('.chapter').forEach(c => c.classList.add('open'));
     const blob = new Blob([html], { type: 'text/html' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = (c.appName || 'tour').replace(/[^a-z0-9]+/gi, '-').toLowerCase() + '-tour.html';
+    a.download = (c.appName || 'demo').replace(/[^a-z0-9]+/gi, '-').toLowerCase() + '-demo.html';
     a.click();
     URL.revokeObjectURL(a.href);
-    flash('⤓ Exported HTML tour');
+    flash('⤓ Exported HTML demo');
   }
 
   function exportPlayer() {
@@ -587,7 +589,7 @@ document.querySelectorAll('.chapter').forEach(c => c.classList.add('open'));
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${escH(c.appName || 'Tour')} — Interactive Tour</title>
+<title>${escH(c.appName || 'Demo')} — Interactive Demo</title>
 <style>
   :root { --accent: ${accent}; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -625,7 +627,7 @@ document.querySelectorAll('.chapter').forEach(c => c.classList.add('open'));
 </head>
 <body>
 <div class="topbar">
-  <div class="logo"><span class="dot"></span> ${escH(c.appName || 'Tour')}</div>
+  <div class="logo"><span class="dot"></span> ${escH(c.appName || 'Demo')}</div>
   <div class="nav">
     ${(c.chapters || []).map((ch, i) => `<a data-nav="${i}">${escH(ch.title || ('Ch ' + (i + 1)))}</a>`).join('')}
   </div>
@@ -790,7 +792,7 @@ window.__TOUR_CONFIG = ${JSON.stringify(c, null, 2)};
     const blob = new Blob([html], { type: 'text/html' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = (c.appName || 'tour').replace(/[^a-z0-9]+/gi, '-').toLowerCase() + '-player.html';
+    a.download = (c.appName || 'demo').replace(/[^a-z0-9]+/gi, '-').toLowerCase() + '-player.html';
     a.click();
     URL.revokeObjectURL(a.href);
     flash('⤓ Exported interactive player');
