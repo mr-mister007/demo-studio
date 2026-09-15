@@ -45,7 +45,7 @@ const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const args = process.argv.slice(2);
 function arg(name, def) { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : def; }
 
-let TARGET_URL = arg('--url', 'http://localhost:3000');
+let TARGET_URL = arg('--url', null);
 const PORT = parseInt(arg('--port', '8940'), 10);
 const CONFIG_PATH = arg('--config', null);
 const OUT_PATH = arg('--out', path.join(process.cwd(), 'built-demo-config.js'));
@@ -66,7 +66,38 @@ function parseTarget(raw) {
   return { protocol, host: u.hostname, port, url: protocol + '://' + u.hostname + ':' + port + '/' };
 }
 let UPSTREAM = null;
-try { UPSTREAM = parseTarget(TARGET_URL); } catch (e) { console.error('Bad --url: ' + e.message); process.exit(1); }
+if (TARGET_URL) { try { UPSTREAM = parseTarget(TARGET_URL); } catch (e) { console.error('Bad --url: ' + e.message); process.exit(1); } }
+
+// ── Welcome page (served when no target connected) ──────────
+function welcomeHtml() {
+  const assets =
+    '<link rel="stylesheet" href="/__tour/demo-engine.css">' +
+    '<link rel="stylesheet" href="/__tour/studio/studio-overlay.css">' +
+    '<script src="/__tour/studio/studio-overlay.js" defer></script>';
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>DemoStudio — Connect to your app</title>
+  ${assets}
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body { background:#0a0a0a; color:#e5e5e5; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; min-height:100vh; display:flex; align-items:center; justify-content:center; }
+    .ds-welcome { text-align:center; max-width:560px; padding:40px; }
+    .ds-welcome h1 { font-size:28px; font-weight:700; color:#fff; margin-bottom:12px; }
+    .ds-welcome p { font-size:15px; color:#888; margin-bottom:28px; line-height:1.6; }
+    .ds-welcome .ds-logo { font-size:42px; margin-bottom:18px; }
+  </style>
+</head>
+<body>
+  <div class="ds-welcome">
+    <div class="ds-logo">▶</div>
+    <h1>DemoStudio</h1>
+    <p>Enter an app URL in the Connect field above to start building interactive demos.</p>
+  </div>
+</body>
+</html>`;
+}
 
 // ── Seed config (the tour you're building) ────────────────────
 function defaultCfg() {
@@ -166,7 +197,7 @@ const server = http.createServer((req, res) => {
     res.end(body);
     return;
   }
-  if (url === ROUTE + 'studio/current') { sendJSON(res, { config: SAVED_CFG || seedCfg, target: UPSTREAM.url }); return; }
+  if (url === ROUTE + 'studio/current') { sendJSON(res, { config: SAVED_CFG || seedCfg, target: UPSTREAM ? UPSTREAM.url : null }); return; }
   if (url === ROUTE + 'studio/target' && req.method === 'POST') {
     let body = '';
     req.on('data', c => body += c);
@@ -404,8 +435,19 @@ IMPORTANT:
   if (url === ROUTE + 'demo-engine.css') return serveFile(res, ENGINE_CSS);
   if (url === ROUTE + 'studio/studio-overlay.js') return serveFile(res, STUDIO_JS);
   if (url === ROUTE + 'studio/studio-overlay.css') return serveFile(res, STUDIO_CSS);
+  if (url === ROUTE + 'welcome') {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end(welcomeHtml());
+    return;
+  }
 
-  // ── Reverse proxy to the target app ─────────────────────────
+  // ── Reverse proxy to the target app —───────────────────────
+  if (!UPSTREAM) {
+    // No target connected yet — serve welcome page with studio panel
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end(welcomeHtml());
+    return;
+  }
   const transport = UPSTREAM.protocol === 'https' ? https : http;
   const proxyReq = transport.request({
     host: UPSTREAM.host,
@@ -451,7 +493,7 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log('');
   console.log('  DemoStudio (AI)');
   console.log('  ────────────────');
-  console.log('  Target : ' + UPSTREAM.url);
+  console.log('  Target : ' + (UPSTREAM ? UPSTREAM.url : '(none — connect via Studio URL bar)'));
   console.log('  Studio : http://localhost:' + PORT);
   console.log('  Save   : ' + OUT_PATH);
   console.log('  Seed   : ' + total + ' steps');
