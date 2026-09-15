@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>TourPack Bookmarklet</title>
+<title>DemoStudio Bookmarklet</title>
 <style>
   body { font-family: Inter, system-ui, sans-serif; background: #1c2333; color: #fff; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
   .wrap { max-width: 520px; text-align: center; padding: 30px; }
@@ -19,11 +19,11 @@
 </head>
 <body>
 <div class="wrap">
-  <h1>TourPack Bookmarklet</h1>
+  <h1>DemoStudio Bookmarklet</h1>
   <p>Drag the button below to your bookmarks bar, then click it on <b>any page</b> to launch the tour. Zero install, works on any site — even ones you don't control.</p>
-  <p>Tip: edit the <code>src</code> URL to point at your hosted <code>tour-overlay.js</code> + <code>tour-config.js</code>.</p>
-  <a class="bookmarklet" href="javascript:(function(){var c=document.createElement('script');c.src='http://localhost:3200/tour-config.js';document.head.appendChild(c);var s=document.createElement('script');s.src='http://localhost:3200/tour-overlay.js';document.head.appendChild(s);var l=document.createElement('link');l.rel='stylesheet';l.href='http://localhost:3200/tour-overlay.css';document.head.appendChild(l);})();">🚀 Launch Tour</a>
-  <p class="hint">Host <code>tour-config.js</code>, <code>tour-overlay.js</code>, and <code>tour-overlay.css</code> on any static server (here: <code>http://localhost:3200</code> — the demo app serves them). Change the three <code>src/href</code> values to your own URL.</p>
+  <p>Tip: edit the <code>src</code> URL to point at your hosted <code>demo-engine.js</code> + <code>demo-config.js</code>.</p>
+  <a class="bookmarklet" href="javascript:(function(){var c=document.createElement('script');c.src='http://localhost:3200/demo-config.js';document.head.appendChild(c);var s=document.createElement('script');s.src='http://localhost:3200/demo-engine.js';document.head.appendChild(s);var l=document.createElement('link');l.rel='stylesheet';l.href='http://localhost:3200/demo-engine.css';document.head.appendChild(l);})();">🚀 Launch Tour</a>
+  <p class="hint">Host <code>demo-config.js</code>, <code>demo-engine.js</code>, and <code>demo-engine.css</code> on any static server (here: <code>http://localhost:3200</code> — the demo app serves them). Change the three <code>src/href</code> values to your own URL.</p>
 </div>
 </body>
 </html>

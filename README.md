@@ -1,4 +1,4 @@
-# 🎯 TourPack — Reusable Interactive Tour Engine
+# 🎯 DemoStudio — Reusable Interactive Tour Engine
 
 Drop an interactive, coach-mark style guided tour onto **any web app without modifying a single line of the app's code**.
 
@@ -10,9 +10,9 @@ The overlay (spotlight square + tooltip card + click-to-advance) is a **self-con
 
 ```
 tour-pack/
-├── tour-overlay.js       ← ENGINE (never edit this) — reads window.__TOUR_CONFIG
-├── tour-overlay.css      ← ENGINE styles (themeable via CSS vars)
-├── tour-config.js        ← YOUR tour data — the ONLY file you edit per app
+├── demo-engine.js       ← ENGINE (never edit this) — reads window.__TOUR_CONFIG
+├── demo-engine.css      ← ENGINE styles (themeable via CSS vars)
+├── demo-config.js        ← YOUR tour data — the ONLY file you edit per app
 │
 ├── generate-proxy.sh     ← Method 1: generate an injection proxy for ANY app
 ├── server.js             ← (generated) ready-to-run proxy
@@ -22,8 +22,8 @@ tour-pack/
 │
 └── extension/            ← Method 2: Chrome/Firefox extension (load unpacked)
     ├── manifest.json
-    ├── tour-overlay.js
-    └── tour-overlay.css
+    ├── demo-engine.js
+    └── demo-engine.css
 ```
 
 ---
@@ -41,11 +41,11 @@ cd proxy-8931 && node server.js
 The proxy serves the REAL app and injects the tour assets into HTML responses (handles gzip/br decompression automatically).
 
 ### Method 2 — Browser extension (works on any site, even remote)
-1. Copy `tour-overlay.js`, `tour-overlay.css`, `tour-config.js` into `extension/` (already there)
+1. Copy `demo-engine.js`, `demo-engine.css`, `demo-config.js` into `extension/` (already there)
 2. Open `chrome://extensions` → enable **Developer mode** → **Load unpacked** → select `extension/`
 3. Browse to the app — the tour appears automatically
 
-Edits to `tour-config.js` need a reload of the extension (or the page).
+Edits to `demo-config.js` need a reload of the extension (or the page).
 
 ### Method 3 — Bookmarklet (zero install, 1 click)
 1. Open `bookmarklet.html`, drag the **Launch Tour** button to your bookmarks bar
@@ -55,7 +55,7 @@ Edits to `tour-config.js` need a reload of the extension (or the page).
 
 ## 🛠 Config — the only file you touch
 
-`tour-config.js` sets `window.__TOUR_CONFIG`:
+`demo-config.js` sets `window.__TOUR_CONFIG`:
 
 ```js
 window.__TOUR_CONFIG = {
@@ -135,10 +135,10 @@ node demo-app.js        # serves a mock OKiR-style app on :3200
 
 The engine exposes a global API:
 ```js
-TourPack.start();   // launch from anywhere
-TourPack.next();
-TourPack.prev();
-TourPack.end();
+DemoStudio.start();   // launch from anywhere
+DemoStudio.next();
+DemoStudio.prev();
+DemoStudio.end();
 ```
 
 ---
