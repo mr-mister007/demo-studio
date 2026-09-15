@@ -1,66 +1,75 @@
-# 🎯 TourPack — Reusable Interactive Tour Engine
+# 🎯 DemoStudio — Create Interactive Demos for Any Web App
 
-Drop an interactive, coach-mark style guided tour onto **any web app without modifying a single line of the app's code**.
+**Like Reprise, but open-source.** Build clickable, guided product demos that run on top of your live application — no code changes required.
 
-The overlay (spotlight square + tooltip card + click-to-advance) is a **self-contained engine** that reads all its content and behavior from a single config file. Point it at an app via one of three zero-code injection methods.
+DemoStudio lets you capture your app's real UI, add guided steps with spotlights and tooltips, and share interactive demos with prospects, customers, or new users.
 
 ---
 
-## ✨ What you get
+## ✨ What You Get
 
 ```
-tour-pack/
-├── tour-overlay.js       ← ENGINE (never edit this) — reads window.__TOUR_CONFIG
-├── tour-overlay.css      ← ENGINE styles (themeable via CSS vars)
-├── tour-config.js        ← YOUR tour data — the ONLY file you edit per app
+demo-studio/
+├── demo-engine.js       ← ENGINE — reads window.__TOUR_CONFIG (never edit)
+├── demo-engine.css      ← ENGINE styles (themeable via CSS vars)
+├── demo-config.js        ← YOUR demo data — the ONLY file you edit per app
 │
-├── generate-proxy.sh     ← Method 1: generate an injection proxy for ANY app
-├── server.js             ← (generated) ready-to-run proxy
+├── studio/               ← Visual Studio: click-to-build demos
+│   ├── studio.js         ← Proxy server + AI generation API
+│   ├── studio-overlay.js ← Studio UI (floating panel, pick mode, editor)
+│   └── studio-overlay.css
 │
-├── demo-app.js           ← tiny mock app to test the tour instantly
+├── proxy-8932/           ← Method 1: generated reverse proxy
 ├── bookmarklet.html      ← Method 3: drag-to-bookmark, works on any site
 │
-└── extension/            ← Method 2: Chrome/Firefox extension (load unpacked)
+└── extension/            ← Method 2: Chrome/Firefox extension
     ├── manifest.json
-    ├── tour-overlay.js
-    └── tour-overlay.css
+    ├── demo-engine.js
+    └── demo-engine.css
 ```
 
 ---
 
-## 🚀 3 ways to inject (no app code changes)
+## 🚀 3 Ways to Inject (No App Code Changes)
 
-### Method 1 — Reverse proxy (recommended, works with any HTTP app)
+### Method 1 — Visual Studio (Recommended)
+**Click elements in your real app to build demos visually.**
+
 ```bash
-./generate-proxy.sh <your-app-host> <your-app-port> <public-port>
-./generate-proxy.sh localhost 3000 8931
-
-cd proxy-8931 && node server.js
-# open http://localhost:8931 — the tour overlay is injected into every HTML page
+cd studio
+node studio.js --url http://localhost:3000 --port 8940
+# Open http://localhost:8940
+# 1. Click 🎯 Pick element → click real UI elements to add steps
+# 2. Edit titles, descriptions, positions
+# 3. Click ✨ AI Generate → auto-create a full demo from page analysis
+# 4. Click 💾 Save → exports demo-config.js
 ```
-The proxy serves the REAL app and injects the tour assets into HTML responses (handles gzip/br decompression automatically).
 
-### Method 2 — Browser extension (works on any site, even remote)
-1. Copy `tour-overlay.js`, `tour-overlay.css`, `tour-config.js` into `extension/` (already there)
-2. Open `chrome://extensions` → enable **Developer mode** → **Load unpacked** → select `extension/`
-3. Browse to the app — the tour appears automatically
+### Method 2 — Reverse Proxy (For embedding in any HTTP app)
+```bash
+cd proxy-8932
+node server.js
+# open http://localhost:8932 — the demo overlay is injected into every HTML page
+```
 
-Edits to `tour-config.js` need a reload of the extension (or the page).
+### Method 3 — Browser Extension (Works on any site, even remote)
+1. Open `chrome://extensions` → enable **Developer mode** → **Load unpacked** → select `extension/`
+2. Browse to your app — the demo appears automatically
 
-### Method 3 — Bookmarklet (zero install, 1 click)
-1. Open `bookmarklet.html`, drag the **Launch Tour** button to your bookmarks bar
-2. Click it on any page → tour launches. Works on sites you don't even control.
+### Method 4 — Bookmarklet (Zero install, 1 click)
+1. Open `bookmarklet.html`, drag **Launch Demo** to your bookmarks bar
+2. Click it on any page → demo launches instantly
 
 ---
 
-## 🛠 Config — the only file you touch
+## 🎯 Demo Config — The Only File You Touch
 
-`tour-config.js` sets `window.__TOUR_CONFIG`:
+`demo-config.js` sets `window.__TOUR_CONFIG`:
 
 ```js
 window.__TOUR_CONFIG = {
   appName: 'My App',
-  accent: '#3b82f6',           // theme color
+  accent: '#3b82f6',           // theme color (your brand)
   showOnce: true,              // remember dismissal in localStorage
   idleAutoStart: false,        // auto-start without click?
 
@@ -71,8 +80,8 @@ window.__TOUR_CONFIG = {
         { title: 'Welcome', body: 'Hello!', /* no sel = intro card */ },
         {
           title: 'Create a project',
-          body: 'Click the New button',
-          sel: 'button:has-text("New Project")',   // ← target selector
+          body: 'Click the New button to begin',
+          sel: 'button:has-text("New Project")',   // target selector
           pos: 'bottom',                            // card position
           action: true                              // user must click the real element
         }
@@ -82,14 +91,14 @@ window.__TOUR_CONFIG = {
 };
 ```
 
-### Step fields
+### Step Fields
 
 | Field | Description |
 |---|---|
 | `title` | Card title |
 | `body` | Explanation text |
-| `sel`   | **Target selector.** CSS, `:has-text("...")` text-filter, `text=raw text`, or comma fallbacks: `'nav a:has-text("OKRs"), button:has-text("OKRs")'` |
-| `pos`   | Card position: `center / right / left / top / bottom` |
+| `sel` | **Target selector.** CSS, `:has-text("...")` text-filter, `text=raw text`, or comma fallbacks: `'nav a:has-text("OKRs"), button:has-text("OKRs")'` |
+| `pos` | Card position: `center / right / left / top / bottom` |
 | `action` | `true` → user must **click the highlighted element** to advance (real interaction). `false` → click "Next →" |
 | `advanceOn` | `click` (default), `select`, `hover`, `manual` |
 | `waitFor` | Optional selector — poll until it appears (handles slow-rendering views) |
@@ -97,48 +106,59 @@ window.__TOUR_CONFIG = {
 
 ---
 
-## 🎨 Theming
+## 🎨 Theming — Match Your Brand
 
-No CSS edits needed — the engine uses CSS variables which you can override from the config:
+No CSS edits needed — the engine uses CSS variables:
 
 ```js
 window.__TOUR_CONFIG = {
-  accent: '#10b981',        // green theme
-  cardBg: '#0f172a',        // dark card
-  cardText: '#f8fafc',
-  cardMuted: '#94a3b8',
-  dimColor: 'rgba(0,0,0,.6)'
+  accent: '#10b981',        // your brand color
+  cardBg: '#0f172a',        // card background
+  cardText: '#f8fafc',      // card text
+  cardMuted: '#94a3b8',     // muted text
+  dimColor: 'rgba(0,0,0,.6)' // spotlight overlay
 }
 ```
 
 ---
 
-## 🧪 Try it instantly (no target app needed)
+## 🤖 AI Demo Generation (Studio Mode Only)
+
+Click **✨ AI Generate** in the Studio panel:
+- Scans your page for interactive elements (buttons, links, inputs, nav, headings)
+- Sends DOM inventory to OpenRouter (free models: Nemotron, Inkling, Cohere, etc.)
+- Returns a structured demo with chapters & steps using **only real selectors from your page**
+- Validates every selector exists before accepting
+
+---
+
+## 🧪 Try It Instantly (No Target App Needed)
 
 ```bash
-node demo-app.js        # serves a mock OKiR-style app on :3200
-# open http://localhost:3200 — tour loads automatically
+node demo-app.js        # serves a mock app on :3200
+# open http://localhost:3200 — demo loads automatically
 ```
 
 ---
 
 ## ⚠️ Caveats
 
-- **WebSockets / SSE**: the HTTP proxy doesn't forward WebSockets yet (add `ws` handling if your app needs it). Extension & bookmarklet bypass this entirely.
+- **WebSockets / SSE**: the HTTP proxy doesn't forward WebSockets yet. Extension & bookmarklet bypass this entirely.
 - **CSP**: if the app has a strict Content-Security-Policy blocking injected scripts, use the extension method (MV3 content scripts bypass page CSP) or add a `nonce`/`unsafe-inline` where you control the app.
 - **SPA routing**: works fine — the engine re-runs launch detection on path changes.
-- **Auth**: the tour only highlights elements that exist on the page; login-gated UIs will show the welcome card first. Configure `disableOnPaths`/`onlyOnPaths` to control where it appears.
+- **Auth**: the demo only highlights elements that exist on the page; login-gated UIs will show the welcome card first. Configure `disableOnPaths`/`onlyOnPaths` to control where it appears.
 
 ---
 
-## 🔌 Programmatic control
+## 🔌 Programmatic Control
 
 The engine exposes a global API:
 ```js
-TourPack.start();   // launch from anywhere
-TourPack.next();
-TourPack.prev();
-TourPack.end();
+DemoStudio.start();   // launch from anywhere
+DemoStudio.next();
+DemoStudio.prev();
+DemoStudio.end();
+DemoStudio.reload(config);  // hot-reload new config
 ```
 
 ---

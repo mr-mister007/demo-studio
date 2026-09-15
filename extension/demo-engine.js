@@ -1,12 +1,11 @@
 /* ═══════════════════════════════════════════════════════════════
-   TourPack Engine v2 — reusable zero-code-modification tour overlay
-   Reads EVERYTHING from window.__TOUR_CONFIG (set by tour-config.js).
-   v2 adds: TourPack.reload(cfg), TourPack.find(sel) — used by Studio.
+   DemoStudio Engine — reusable zero-code-modification demo overlay
+   Reads EVERYTHING from window.__TOUR_CONFIG (set by demo-config.js).
    Drop into ANY app via: proxy injection / browser extension / bookmarklet.
-   ═══════════════════════════════════════════════════════════════ */
+   ════════════════════════════════════════════════════════════════ */
 (() => {
-  if (window.__tourPackLoaded) return;
-  window.__tourPackLoaded = true;
+  if (window.__demoStudioLoaded) return;
+  window.__demoStudioLoaded = true;
 
   let C = (window.__TOUR_CONFIG || {});
 
@@ -27,7 +26,7 @@
       clickHint: c.clickHint || 'Click the highlighted element above ↑',
       autoDelay: c.autoDelay ?? 1500,          // ms before launch modal shows
       idleAutoStart: c.idleAutoStart ?? false, // auto-start tour after delay?
-      storageKey: c.storageKey || 'tourpack_seen',
+      storageKey: c.storageKey || 'demostudio_seen',
       showOnce: c.showOnce ?? false,           // remember dismissal in localStorage?
       disableOnPaths: c.disableOnPaths || [],
       onlyOnPaths: c.onlyOnPaths || null,
@@ -70,46 +69,46 @@
     chapters.forEach((ch, ci) => ch.steps.forEach((s, si) => flat.push({ ci, si })));
     TOTAL = flat.length;
     if (cur >= TOTAL) cur = Math.max(0, TOTAL - 1);
-    const pl = $('tourpack-progress-label');
+    const pl = $('demostudio-progress-label');
     if (pl) pl.textContent = TOTAL ? `1 / ${TOTAL}` : '';
   }
 
   function applyTheme() {
     const root = document.documentElement;
-    root.style.setProperty('--tourpack-accent', CFG.accent);
-    if (C.cardBg) root.style.setProperty('--tourpack-card-bg', C.cardBg);
-    if (C.cardText) root.style.setProperty('--tourpack-card-text', C.cardText);
-    if (C.cardMuted) root.style.setProperty('--tourpack-card-muted', C.cardMuted);
-    if (C.dimColor) root.style.setProperty('--tourpack-dim', C.dimColor);
+    root.style.setProperty('--demostudio-accent', CFG.accent);
+    if (C.cardBg) root.style.setProperty('--demostudio-card-bg', C.cardBg);
+    if (C.cardText) root.style.setProperty('--demostudio-card-text', C.cardText);
+    if (C.cardMuted) root.style.setProperty('--demostudio-card-muted', C.cardMuted);
+    if (C.dimColor) root.style.setProperty('--demostudio-dim', C.dimColor);
   }
 
   function applyLabels() {
     const set = (id, txt) => { const n = document.getElementById(id); if (n) n.textContent = txt; };
-    set('tourpack-skip', CFG.skipLabel);
-    set('tourpack-back', CFG.backLabel);
-    set('tourpack-next', CFG.nextLabel);
-    set('tourpack-start', CFG.startLabel);
-    set('tourpack-dismiss', CFG.dismissLabel);
-    const h2 = document.querySelector('#tourpack-launch-card h2'); if (h2) h2.textContent = CFG.launchTitle;
-    const p = document.querySelector('#tourpack-launch-card p'); if (p) p.textContent = CFG.launchBody;
+    set('demostudio-skip', CFG.skipLabel);
+    set('demostudio-back', CFG.backLabel);
+    set('demostudio-next', CFG.nextLabel);
+    set('demostudio-start', CFG.startLabel);
+    set('demostudio-dismiss', CFG.dismissLabel);
+    const h2 = document.querySelector('#demostudio-launch-card h2'); if (h2) h2.textContent = CFG.launchTitle;
+    const p = document.querySelector('#demostudio-launch-card p'); if (p) p.textContent = CFG.launchBody;
   }
 
   // ── DOM build ─────────────────────────────────────────────────
   const layer = document.createElement('div');
-  layer.id = 'tourpack-layer';
+  layer.id = 'demostudio-layer';
   layer.innerHTML = `
-    <div id="tourpack-marker"></div>
-    <div id="tourpack-card">
-      <button id="tourpack-skip">${CFG.skipLabel}</button>
-      <div id="tourpack-kicker"></div>
-      <div id="tourpack-title"></div>
-      <div id="tourpack-body"></div>
-      <div id="tourpack-hint"></div>
-      <div id="tourpack-actions">
-        <div id="tourpack-dots"></div>
-        <div id="tourpack-btns">
-          <button id="tourpack-back">${CFG.backLabel}</button>
-          <button id="tourpack-next">${CFG.nextLabel}</button>
+    <div id="demostudio-marker"></div>
+    <div id="demostudio-card">
+      <button id="demostudio-skip">${CFG.skipLabel}</button>
+      <div id="demostudio-kicker"></div>
+      <div id="demostudio-title"></div>
+      <div id="demostudio-body"></div>
+      <div id="demostudio-hint"></div>
+      <div id="demostudio-actions">
+        <div id="demostudio-dots"></div>
+        <div id="demostudio-btns">
+          <button id="demostudio-back">${CFG.backLabel}</button>
+          <button id="demostudio-next">${CFG.nextLabel}</button>
         </div>
       </div>
     </div>
@@ -117,28 +116,28 @@
   document.body.appendChild(layer);
 
   const launch = document.createElement('div');
-  launch.id = 'tourpack-launch';
+  launch.id = 'demostudio-launch';
   launch.innerHTML = `
-    <div id="tourpack-launch-card">
+    <div id="demostudio-launch-card">
       <h2>${CFG.launchTitle}</h2>
       <p>${CFG.launchBody}</p>
-      <div id="tourpack-launch-btns">
-        <button id="tourpack-start">${CFG.startLabel}</button>
-        <button id="tourpack-dismiss">${CFG.dismissLabel}</button>
+      <div id="demostudio-launch-btns">
+        <button id="demostudio-start">${CFG.startLabel}</button>
+        <button id="demostudio-dismiss">${CFG.dismissLabel}</button>
       </div>
     </div>
   `;
   document.body.appendChild(launch);
 
   const progress = document.createElement('div');
-  progress.id = 'tourpack-progress';
-  progress.innerHTML = `<span id="tourpack-progress-label">1 / ${TOTAL}</span><span class="bar"><i id="tourpack-progress-fill"></i></span>`;
+  progress.id = 'demostudio-progress';
+  progress.innerHTML = `<span id="demostudio-progress-label">1 / ${TOTAL}</span><span class="bar"><i id="demostudio-progress-fill"></i></span>`;
   document.body.appendChild(progress);
 
   applyTheme();
 
   const $ = id => document.getElementById(id);
-  const marker = $('tourpack-marker'), card = $('tourpack-card'), hint = $('tourpack-hint'), launcher = $('tourpack-launch');
+  const marker = $('demostudio-marker'), card = $('demostudio-card'), hint = $('demostudio-hint'), launcher = $('demostudio-launch');
 
   rebuild();
 
@@ -192,25 +191,25 @@
     if (!TOTAL) return;
     const { ci, si } = flat[cur];
     const ch = chapters[ci], st = ch.steps[si];
-    $('tourpack-kicker').textContent = `CHAPTER ${ci + 1} · ${ch.title.toUpperCase()}`;
-    $('tourpack-title').textContent = st.title;
-    $('tourpack-body').textContent = st.body;
+    $('demostudio-kicker').textContent = `CHAPTER ${ci + 1} · ${ch.title.toUpperCase()}`;
+    $('demostudio-title').textContent = st.title;
+    $('demostudio-body').textContent = st.body;
     if (st.action) {
       hint.textContent = st.hint || CFG.clickHint;
       hint.style.display = 'block';
-      $('tourpack-next').style.display = 'none';
+      $('demostudio-next').style.display = 'none';
     } else {
       hint.style.display = 'none';
-      $('tourpack-next').style.display = '';
+      $('demostudio-next').style.display = '';
     }
-    const dots = $('tourpack-dots'); dots.innerHTML = '';
+    const dots = $('demostudio-dots'); dots.innerHTML = '';
     ch.steps.forEach((_, i) => {
       const d = document.createElement('span'); d.className = 'dot' + (i === si ? ' on' : ''); dots.appendChild(d);
     });
-    $('tourpack-next').textContent = cur === TOTAL - 1 ? CFG.finishLabel : CFG.nextLabel;
-    $('tourpack-back').style.visibility = cur === 0 ? 'hidden' : 'visible';
-    $('tourpack-progress-label').textContent = `${cur + 1} / ${TOTAL}`;
-    $('tourpack-progress-fill').style.width = ((cur + 1) / TOTAL * 100) + '%';
+    $('demostudio-next').textContent = cur === TOTAL - 1 ? CFG.finishLabel : CFG.nextLabel;
+    $('demostudio-back').style.visibility = cur === 0 ? 'hidden' : 'visible';
+    $('demostudio-progress-label').textContent = `${cur + 1} / ${TOTAL}`;
+    $('demostudio-progress-fill').style.width = ((cur + 1) / TOTAL * 100) + '%';
     position(); startPolling();
   }
 
@@ -311,7 +310,7 @@
     if (cur > 0) { cur--; render(); attachAction(); }
   }
 
-  // ── Reload with a new config (used by TourPack Studio) ───────
+  // ── Reload with a new config (used by DemoStudio Studio) ─────
   function reload(cfg) {
     try {
       C = cfg || {};
@@ -321,14 +320,14 @@
       rebuild();
       if (running && TOTAL) { render(); attachAction(); }
       else if (running) end();
-    } catch (e) { console.warn('TourPack reload failed', e); }
+    } catch (e) { console.warn('DemoStudio reload failed', e); }
   }
 
-  $('tourpack-start').addEventListener('click', start);
-  $('tourpack-dismiss').addEventListener('click', () => { launcher.classList.remove('on'); if (CFG.showOnce) { try { localStorage.setItem(CFG.storageKey, '1'); } catch (e) {} } });
-  $('tourpack-next').addEventListener('click', next);
-  $('tourpack-back').addEventListener('click', prev);
-  $('tourpack-skip').addEventListener('click', end);
+  $('demostudio-start').addEventListener('click', start);
+  $('demostudio-dismiss').addEventListener('click', () => { launcher.classList.remove('on'); if (CFG.showOnce) { try { localStorage.setItem(CFG.storageKey, '1'); } catch (e) {} } });
+  $('demostudio-next').addEventListener('click', next);
+  $('demostudio-back').addEventListener('click', prev);
+  $('demostudio-skip').addEventListener('click', end);
   marker.addEventListener('click', next);
   document.addEventListener('keydown', (e) => {
     if (!running) return;
@@ -348,8 +347,8 @@
     if (CFG.showOnce) { try { if (localStorage.getItem(CFG.storageKey)) return; } catch (e) {} }
     if (CFG.disableOnPaths && CFG.disableOnPaths.some(p => window.location.pathname.includes(p))) return;
     if (CFG.onlyOnPaths && !CFG.onlyOnPaths.some(p => window.location.pathname.includes(p))) return;
-    if (!window.__tourpackShown) {
-      window.__tourpackShown = true;
+    if (!window.__demostudioShown) {
+      window.__demostudioShown = true;
       setTimeout(() => {
         launcher.classList.add('on');
         if (CFG.idleAutoStart) setTimeout(() => { if (launcher.classList.contains('on')) start(); }, 700);
@@ -358,7 +357,7 @@
   }
 
   // Public API for programmatic control (console / Studio / other scripts)
-  window.TourPack = {
+  window.DemoStudio = {
     start, end, next, prev, reload,
     find: (sel) => findTarget(sel),
     getConfig: () => CFG,

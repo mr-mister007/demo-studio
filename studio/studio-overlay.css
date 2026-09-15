@@ -1,9 +1,9 @@
 /* ═══════════════════════════════════════════════════════════════
-   TourPack Studio — CSS for the floating builder UI.
+   DemoStudio Studio — CSS for the floating builder UI.
    Injected along with studio-overlay.js.
    Dark professional theme (#050505-ish) matching the user's preference.
    ═══════════════════════════════════════════════════════════════ */
-#tourpack-studio {
+#demostudio-studio {
   --st-accent: #3b82f6;
   --st-bg: #0d1117;
   --st-panel: #161b22;
@@ -19,14 +19,14 @@
   pointer-events: none;
   transition: none;
 }
-#tourpack-studio.studio-dragging {
+#demostudio-studio.studio-dragging {
   transition: none !important;
   opacity: .88;
 }
-#tourpack-studio.studio-dragging #studio-panel {
+#demostudio-studio.studio-dragging #studio-panel {
   box-shadow: 0 32px 90px rgba(0,0,0,.7), 0 0 0 1px rgba(59,130,246,.3);
 }
-#tourpack-studio * { box-sizing: border-box; }
+#demostudio-studio * { box-sizing: border-box; }
 
 #studio-panel {
   pointer-events: auto;

@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /* ═══════════════════════════════════════════════════════════════
-   TourPack Studio — click-to-build tours for ANY web app.
+   DemoStudio — click-to-build demos for ANY web app.
    Proxies your app (no code changes), floats a Studio panel over
    it, click the real UI to add steps, preview live, save a
-   tour-config.js. Also proxy-rebinds at runtime.
+   demo-config.js. Also proxy-rebinds at runtime.
 
    Usage:
      node studio.js --url <target> [--port <n>] [--config <seed>] [--out <path>]
@@ -12,7 +12,7 @@
      POST /__tour/studio/target   {url} → rebind proxy target
      POST /__tour/studio/save     {config} → persist to --out
      GET  /__tour/studio/current        → current draft config
-   ═══════════════════════════════════════════════════════════════ */
+   ════════════════════════════════════════════════════════════════ */
 const http = require('http');
 const https = require('https');
 const zlib = require('zlib');
@@ -25,13 +25,13 @@ function arg(name, def) { const i = args.indexOf(name); return i >= 0 ? args[i +
 let TARGET_URL = arg('--url', 'http://localhost:3000');
 const PORT = parseInt(arg('--port', '8940'), 10);
 const CONFIG_PATH = arg('--config', null);
-const OUT_PATH = arg('--out', path.join(process.cwd(), 'built-tour-config.js'));
+const OUT_PATH = arg('--out', path.join(process.cwd(), 'built-demo-config.js'));
 
 const ROUTE = '/__tour/';
 const STUDIO_ROUTE = ROUTE + 'studio/';
 
-const ENGINE_JS  = path.join(__dirname, '..', 'tour-overlay.js');
-const ENGINE_CSS = path.join(__dirname, '..', 'tour-overlay.css');
+const ENGINE_JS  = path.join(__dirname, '..', 'demo-engine.js');
+const ENGINE_CSS = path.join(__dirname, '..', 'demo-engine.css');
 const STUDIO_JS  = path.join(__dirname, 'studio-overlay.js');
 const STUDIO_CSS = path.join(__dirname, 'studio-overlay.css');
 
@@ -45,9 +45,9 @@ function parseTarget(raw) {
 let UPSTREAM = null;
 try { UPSTREAM = parseTarget(TARGET_URL); } catch (e) { console.error('Bad --url: ' + e.message); process.exit(1); }
 
-// ── Seed config (the tour you're building) ────────────────────
+// ── Seed config (the demo you're building) ────────────────────
 function defaultCfg() {
-  return { appName: 'TourPack', launchTitle: 'Take a 2-minute tour', launchBody: 'See how this app works.', startLabel: 'Start tour', dismissLabel: 'Explore on my own', accent: '#3b82f6', chapters: [] };
+  return { appName: 'DemoStudio', launchTitle: 'Take a 2-minute demo', launchBody: 'See how this app works.', startLabel: 'Start demo', dismissLabel: 'Explore on my own', accent: '#3b82f6', chapters: [] };
 }
 let seedCfg = defaultCfg();
 let SAVED_CFG = null     // last saved config (draft / published)
@@ -94,10 +94,10 @@ function decompress(buf, enc) {
 const ROUTE2 = '/__tour/';
 function injectAssets(html) {
   const assets =
-    '<link rel="stylesheet" href="' + ROUTE2 + 'tour-overlay.css">' +
+    '<link rel="stylesheet" href="' + ROUTE2 + 'demo-engine.css">' +
     '<link rel="stylesheet" href="' + ROUTE2 + 'studio/studio-overlay.css">' +
-    '<script src="' + ROUTE2 + 'tour-config.js" defer></script>' +
-    '<script src="' + ROUTE2 + 'tour-overlay.js" defer></script>' +
+    '<script src="' + ROUTE2 + 'demo-config.js" defer></script>' +
+    '<script src="' + ROUTE2 + 'demo-engine.js" defer></script>' +
     '<script src="' + ROUTE2 + 'studio/studio-overlay.js" defer></script>';
   if (html.includes('</body>')) return html.replace('</body>', assets + '\n</body>');
   return html + assets;
@@ -108,7 +108,7 @@ const server = http.createServer((req, res) => {
   const url = req.url.split('?')[0];
 
   // Dynamic draft config shared by engine + studio
-  if (url === ROUTE + 'tour-config.js') {
+  if (url === ROUTE + 'demo-config.js') {
     const body = 'window.__TOUR_CONFIG = ' + JSON.stringify(SAVED_CFG || seedCfg, null, 2) + ';\n';
     res.writeHead(200, { 'Content-Type': 'application/javascript', 'Cache-Control': 'no-store' });
     res.end(body);
@@ -147,8 +147,8 @@ const server = http.createServer((req, res) => {
   }
 
   // Static assets
-  if (url === ROUTE + 'tour-overlay.js') return serveFile(res, ENGINE_JS);
-  if (url === ROUTE + 'tour-overlay.css') return serveFile(res, ENGINE_CSS);
+  if (url === ROUTE + 'demo-engine.js') return serveFile(res, ENGINE_JS);
+  if (url === ROUTE + 'demo-engine.css') return serveFile(res, ENGINE_CSS);
   if (url === ROUTE + 'studio/studio-overlay.js') return serveFile(res, STUDIO_JS);
   if (url === ROUTE + 'studio/studio-overlay.css') return serveFile(res, STUDIO_CSS);
 
@@ -196,7 +196,7 @@ const server = http.createServer((req, res) => {
 server.listen(PORT, '0.0.0.0', () => {
   const total = (seedCfg.chapters || []).reduce((a, c) => a + (c.steps || []).length, 0);
   console.log('');
-  console.log('  TourPack Studio');
+  console.log('  DemoStudio');
   console.log('  ────────────────');
   console.log('  Target : ' + UPSTREAM.url);
   console.log('  Studio : http://localhost:' + PORT);
@@ -204,7 +204,7 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log('  Seed   : ' + total + ' steps');
   console.log('');
   console.log('  Open the Studio URL. Click 🎯 Pick element, then');
-  console.log('  click the real app elements to build your tour.');
+  console.log('  click the real app elements to build your demo.');
   console.log('');
   console.log('  Rebind target at runtime:');
   console.log("    curl -X POST " + ROUTE + "studio/target -d '{\"url\":\"http://other:9999\"}'");
