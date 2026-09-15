@@ -257,10 +257,11 @@ const server = http.createServer((req, res) => {
 ⚠️ CRITICAL RULES — VIOLATION MEANS YOUR OUTPUT WILL BE REJECTED:
 1. EVERY step's "sel" MUST BE AN EXACT COPY of a selector from the inventory below. NO exceptions, NO modifications, NO inventions.
 2. If an element is NOT in the inventory, you CANNOT reference it — do not hallucinate selectors.
-3. Chapter titles and step titles must describe the ACTUAL element text/role from the inventory.
+3. Chapter titles and step titles MUST describe the ACTUAL element text/label from the inventory — NEVER generic "first button", "second button", "first link", etc. Use the element's real text or label (e.g. "Sign In", "New Objective", "Dashboard", "Show password").
 4. Group steps into logical chapters (1-4 chapters). Each chapter should have 2-6 steps.
 5. The FIRST step should introduce the app's main entry point (hero CTA, logo, or main nav). 
 6. Output ONLY valid JSON (no markdown, no extra text, no explanations, no reasoning, no thinking process).
+7. PREFER elements with meaningful text/labels. If an inventory entry has a generic class-based text (MuiButtonBase-root, etc.), skip it unless it's the only option.
 
 DOM INVENTORY (tag | text | role | css selector — copy sel EXACTLY):
 ${inventoryLines}

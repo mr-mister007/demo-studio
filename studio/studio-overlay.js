@@ -381,12 +381,48 @@
       if (tag === 'li' && el.querySelector('a')) continue; // skip nested li>a dupes
       if (tag === 'svg' || tag === 'path') continue;
       const text = (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80);
-      const label = el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('alt') || el.getAttribute('title') || '';
+      const aria = el.getAttribute('aria-label') || '';
+      const placeholder = el.getAttribute('placeholder') || '';
+      const alt = el.getAttribute('alt') || '';
+      const title = el.getAttribute('title') || '';
       const role = el.getAttribute('role') || '';
       const cls = (el.className && typeof el.className === 'string') ? el.className : '';
-      const btnText = (tag === 'button' && text) ? text : '';
+      const testId = el.getAttribute('data-testid') || el.getAttribute('data-cy') || '';
+      // Rich context: svg icon name, child text, closest heading
+      let iconName = '';
+      const svg = el.querySelector('svg');
+      if (svg) {
+        const t = svg.querySelector('title');
+        if (t && t.textContent) iconName = t.textContent.trim();
+        else {
+          const iconCls = (svg.getAttribute('class') || '');
+          const m = iconCls.match(/lucide-([a-z0-9-]+)/i) || iconCls.match(/icon-([a-z0-9-]+)/i) || iconCls.match(/mui-([a-z0-9-]+)/i);
+          if (m) iconName = m[1].replace(/-/g, ' ');
+        }
+      }
+      // Nearest heading context for cards/sections
+      let heading = '';
+      let node = el;
+      for (let i = 0; i < 3 && node; i++) {
+        const h = node.querySelector && node.querySelector('h1, h2, h3, h4, h5, h6');
+        const headingText = h ? h.textContent.trim().replace(/\s+/g, ' ').slice(0, 40) : '';
+        if (headingText) { heading = headingText; break; }
+        node = node.parentElement;
+      }
+      const label = aria || placeholder || alt || title || testId || iconName || heading;
       if (!text && !label && !role && !cls) continue;
       if (text.length < 2 && !label && !role && !cls) continue;
+      // Build a descriptive text for the LLM
+      const desc = (() => {
+        if (text && text.length >= 2) return text;
+        if (placeholder) return placeholder;
+        if (aria) return aria;
+        if (iconName) return iconName;
+        if (alt) return alt;
+        if (title) return title;
+        if (testId) return testId;
+        return '';
+      })();
       const sel = (() => {
         try {
           const s = window.__studioSelectorFor ? window.__studioSelectorFor(el) : null;
@@ -399,7 +435,7 @@
       seen.add(key);
       out.push({
         tag: tag.toUpperCase(),
-        text: ((text || label || '').slice(0, 60) || cls.slice(0, 40)),
+        text: (desc || cls.slice(0, 40)).slice(0, 60),
         role: role,
         sel: sel
       });
