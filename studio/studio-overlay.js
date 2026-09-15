@@ -122,11 +122,19 @@
       const s = '#' + CSS.escape(el.id);
       if (document.querySelectorAll(s).length === 1) return s;
     }
-    // 2) class chain (real CSS — no :has-text)
-    const cls = el.className && typeof el.className === 'string' ? el.className.split(/\s+/).filter(Boolean).slice(0, 2) : [];
-    if (cls.length) {
-      const s = el.tagName.toLowerCase() + cls.map(c => '.' + CSS.escape(c)).join('');
+    // 2) data-testid / data-cy / data-test attributes (most stable for testing)
+    const testId = el.getAttribute('data-testid') || el.getAttribute('data-cy') || el.getAttribute('data-test');
+    if (testId) {
+      const s = el.tagName.toLowerCase() + '[data-testid="' + CSS.escape(testId) + '"]';
       try { if (document.querySelectorAll(s).length === 1) return s; } catch (e) {}
+      // Try generic attribute match
+      ['data-testid', 'data-cy', 'data-test'].forEach(attr => {
+        const val = el.getAttribute(attr);
+        if (val) {
+          const s2 = '[' + attr + '="' + CSS.escape(val) + '"]';
+          try { if (document.querySelectorAll(s2).length === 1) return s2; } catch (e) {}
+        }
+      });
     }
     // 3) unique aria-label attribute
     const label = el.getAttribute('aria-label');
@@ -143,7 +151,21 @@
       const s = 'input[type="' + el.type + '"]';
       try { if (document.querySelectorAll(s).length === 1) return s; } catch (e) {}
     }
-    // 5) nth-child path (last resort)
+    // 5) class chain (real CSS — prefer stable classes, avoid utility classes)
+    const cls = el.className && typeof el.className === 'string' 
+      ? el.className.split(/\s+/).filter(c => c && !/^\d/.test(c) && !c.startsWith('css-') && !c.startsWith('_') && c.length > 2).slice(0, 2) 
+      : [];
+    if (cls.length) {
+      const s = el.tagName.toLowerCase() + cls.map(c => '.' + CSS.escape(c)).join('');
+      try { if (document.querySelectorAll(s).length === 1) return s; } catch (e) {}
+    }
+    // 6) unique placeholder for inputs
+    const placeholder = el.getAttribute('placeholder');
+    if (placeholder) {
+      const s = el.tagName.toLowerCase() + '[placeholder="' + CSS.escape(placeholder) + '"]';
+      try { if (document.querySelectorAll(s).length === 1) return s; } catch (e) {}
+    }
+    // 7) nth-child path (last resort)
     let parts = [];
     let node = el;
     while (node && node !== document.body && parts.length < 5) {
@@ -392,6 +414,10 @@
       const dom = collectDomInventory();
       if (!dom.length) { flash('No interactive elements found on this page'); return; }
       flash('✨ Asking AI to design tour (' + dom.length + ' elements)…');
+      // Debug: log what we're sending
+      console.log('[Studio] DOM inventory collected (' + dom.length + ' elements):');
+      dom.slice(0, 15).forEach(d => console.log('[Studio]  ', d.sel, '|', d.tag, '|', d.text));
+      if (dom.length > 15) console.log('[Studio]  ... and', dom.length - 15, 'more');
 
       const res = await fetch('/__tour/studio/ai-generate', {
         method: 'POST',

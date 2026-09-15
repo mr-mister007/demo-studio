@@ -21,7 +21,17 @@ const path = require('path');
 
 // ── AI (OpenRouter) config — reads key from ~/.atlas/atlas.yaml ─
 let AI_KEY = null;
-const AI_MODELS = ['liquid/lfm-2.5-2.6b:free', 'dots-studio/dots-3-note-preview:free', 'nvidia/nemotron-3.5-lightning:free'];
+// Use stronger models that follow instructions better; free-tier but more capable
+// Check OpenRouter for current free models - updated from live API
+// Note: many "free" models have rate limits or are temporarily unavailable
+const AI_MODELS = [
+  'nvidia/nemotron-3.5-lightning:free',
+  'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
+  'thinkingmachines/inkling:free',
+  'cohere/north-mini-code:free',
+  'dots-studio/dots-3-note-preview:free',
+  'liquid/lfm-2.5-2.6b:free'
+];
 let AI_MODEL = AI_MODELS[0];
 let AI_PROVIDER = 'openrouter';
 try {
@@ -198,21 +208,54 @@ const server = http.createServer((req, res) => {
         if (!AI_KEY) return sendJSON(res, { ok: false, error: 'No OpenRouter key found in ~/.atlas/atlas.yaml' }, 400);
 
         const sample = (dom || []).slice(0, 120);
-        const prompt = `You are a UX onboarding expert. Analyze this DOM inventory of the web app "${appName || targetUrl || 'the app'}" and design a 3-6 chapter interactive tour (coach marks). 
+        const inventoryLines = sample.map(d => `- ${d.tag} | ${d.text || ''} | ${d.role || ''} | ${d.sel}`).join('\n');
+        console.log('[AI] DOM inventory sent to LLM (' + sample.length + ' elements):');
+        sample.slice(0, 10).forEach(d => console.log('[AI]  ', d.sel, '|', d.tag, '|', (d.text || '').slice(0, 40)));
+        if (sample.length > 10) console.log('[AI]  ... and', sample.length - 10, 'more');
+        
+        // Build concrete examples from actual inventory
+        const exampleSel = sample[0]?.sel || 'button.primary-btn';
+        const exampleText = sample[0]?.text || 'Get Started';
+        const exampleTag = sample[0]?.tag || 'BUTTON';
+        const appTitle = sample.find(d => d.tag === 'H1' || d.tag === 'H2' || d.tag === 'H3')?.text || (appName || targetUrl || 'the app');
+        
+        const prompt = `You are a UX onboarding expert. Create a tour for "${appName || targetUrl || 'the app'}" using ONLY the elements below.
 
-DOM INVENTORY (tag | text | role | css selector):
-${sample.map(d => `- ${d.tag} | ${d.text || ''} | ${d.role || ''} | ${d.sel}`).join('\n')}
+⚠️ CRITICAL RULES — VIOLATION MEANS YOUR OUTPUT WILL BE REJECTED:
+1. EVERY step's "sel" MUST BE AN EXACT COPY of a selector from the inventory below. NO exceptions, NO modifications, NO inventions.
+2. If an element is NOT in the inventory, you CANNOT reference it — do not hallucinate selectors.
+3. Chapter titles and step titles must describe the ACTUAL element text/role from the inventory.
+4. Maximum 4 steps per chapter, maximum 6 chapters.
+5. Output ONLY valid JSON (no markdown, no extra text, no explanations, no reasoning, no thinking process).
 
-Rules:
-- Tour must teach the user the app's key features/actions using real elements.
-- 1-4 steps per chapter; each step target a specific element from the inventory.
-- Titles concise (max 50 chars), bodies instructive (max 180 chars).
-- "sel" MUST be an exact selector from the inventory (copy it verbatim).
-- "pos" = top|bottom|left|right|center.
-- accent: pick a nice hex color.
+DOM INVENTORY (tag | text | role | css selector — copy sel EXACTLY):
+${inventoryLines}
 
-Respond with ONLY valid JSON (no markdown fences), shaped exactly like:
-{"appName":"...","launchTitle":"...","launchBody":"...","startLabel":"Start tour","dismissLabel":"Explore on my own","accent":"#...","chapters":[{"title":"...","steps":[{"title":"...","body":"...","sel":"...","pos":"bottom","action":false}]}]}`;
+Output JSON shaped EXACTLY:
+{
+  "appName": "${appTitle}",
+  "launchTitle": "Welcome to ${appTitle}",
+  "launchBody": "Let me show you the key features.",
+  "startLabel": "Start tour",
+  "dismissLabel": "Explore on my own",
+  "accent": "#3b82f6",
+  "chapters": [
+    {
+      "title": "Getting Started",
+      "steps": [
+        {
+          "title": "Click ${exampleText}",
+          "body": "This ${exampleTag.toLowerCase()} ${exampleText.toLowerCase()} takes you to the main feature.",
+          "sel": "${exampleSel}",
+          "pos": "bottom",
+          "action": false
+        }
+      ]
+    }
+  ]
+}
+
+IMPORTANT: The example above uses "${exampleSel}" from the inventory. Your output MUST use ONLY selectors from the inventory above. Every "sel" value must be an EXACT match to one of the selectors listed. Do NOT use the example selector "${exampleSel}" unless it appears in the inventory above.`;
 
         let llmRes, data, msg, raw = null;
         for (let attempt = 0; attempt < AI_MODELS.length; attempt++) {
@@ -254,11 +297,36 @@ Respond with ONLY valid JSON (no markdown fences), shaped exactly like:
         }
         if (!raw) return sendJSON(res, { ok: false, error: 'All AI models returned empty responses (rate-limited or reasoning-only). Retry in a moment.' }, 502);
 
+        console.log('[AI] Raw LLM response (first 500 chars):', raw.slice(0, 500));
+
         // Strip markdown fences if present
         const cleaned = raw.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
-        // Find first { ... } block
-        const start = cleaned.indexOf('{');
-        const end = cleaned.lastIndexOf('}');
+        // Find first complete { ... } block - handle case where model outputs reasoning text first
+        // Look for the outermost complete JSON object by tracking braces
+        let start = -1;
+        let end = -1;
+        let depth = 0;
+        let inString = false;
+        let escape = false;
+        for (let i = 0; i < cleaned.length; i++) {
+          const c = cleaned[i];
+          if (inString) {
+            if (escape) { escape = false; }
+            else if (c === '\\') { escape = true; }
+            else if (c === '"') { inString = false; }
+            continue;
+          }
+          if (c === '"') { inString = true; continue; }
+          if (c === '{') {
+            if (depth === 0 && start === -1) start = i;
+            depth++;
+          } else if (c === '}') {
+            if (depth > 0) {
+              depth--;
+              if (depth === 0) { end = i; break; }
+            }
+          }
+        }
         if (start < 0 || end < 0) return sendJSON(res, { ok: false, error: 'LLM returned non-JSON: ' + cleaned.slice(0, 200) }, 502);
         let jsonStr = cleaned.slice(start, end + 1);
 
@@ -277,6 +345,26 @@ Respond with ONLY valid JSON (no markdown fences), shaped exactly like:
           }
         }
 
+        // NEW: Validate that all selectors in the response exist in the inventory
+        const validSelectors = new Set((dom || []).map(d => d.sel));
+        const validationErrors = [];
+        function validateSelectors(obj, path = '') {
+          if (!obj || typeof obj !== 'object') return;
+          if (obj.sel && typeof obj.sel === 'string') {
+            if (!validSelectors.has(obj.sel)) {
+              validationErrors.push(path + '.sel: "' + obj.sel + '" NOT IN INVENTORY');
+            }
+          }
+          for (const key of Object.keys(obj)) {
+            validateSelectors(obj[key], path ? path + '.' + key : key);
+          }
+        }
+        validateSelectors(cfg);
+        if (validationErrors.length) {
+          console.error('[AI] Selector validation failed:', validationErrors);
+          return sendJSON(res, { ok: false, error: 'AI hallucinated selectors: ' + validationErrors.slice(0, 3).join('; '), invalidSelectors: validationErrors }, 502);
+        }
+
         // Sanitize / validate shape
         if (!cfg.chapters || !Array.isArray(cfg.chapters)) return sendJSON(res, { ok: false, error: 'LLM config missing chapters' }, 502);
         cfg.chapters = cfg.chapters.slice(0, 8).map(ch => ({
@@ -290,6 +378,8 @@ Respond with ONLY valid JSON (no markdown fences), shaped exactly like:
           }))
         }));
         if (!cfg.appName) cfg.appName = appName || 'My App';
+
+        console.log('[AI] Generated config validated:', JSON.stringify(cfg).slice(0, 500));
 
         sendJSON(res, { ok: true, config: cfg, model: AI_MODEL });
       } catch (e) { sendJSON(res, { ok: false, error: e.message }, 500); }
