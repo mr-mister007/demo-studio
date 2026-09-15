@@ -235,36 +235,49 @@ const server = http.createServer((req, res) => {
     req.on('data', c => body += c);
     req.on('end', async () => {
       try {
-        const { dom, url: targetUrl, appName } = JSON.parse(body);
+        const { dom, pageContent, userPrompt, url: targetUrl, appName } = JSON.parse(body);
         if (!AI_KEY) return sendJSON(res, { ok: false, error: 'No OpenRouter key found in ~/.atlas/atlas.yaml' }, 400);
 
         const sample = (dom || []).slice(0, 120);
         const inventoryLines = sample.map(d => `- ${d.tag} | ${d.text || ''} | ${d.role || ''} | ${d.sel}`).join('\n');
+        // Also give the LLM single-quoted versions of selectors (they nest better in JSON)
+        const inventoryLinesQuoted = sample.map(d => `- ${d.tag} | ${d.text || ''} | ${d.role || ''} | ${String(d.sel).replace(/"/g, "'")}`).join('\n');
         console.log('[AI] DOM inventory sent to LLM (' + sample.length + ' elements):');
         sample.slice(0, 10).forEach(d => console.log('[AI]  ', d.sel, '|', d.tag, '|', (d.text || '').slice(0, 40)));
         if (sample.length > 10) console.log('[AI]  ... and', sample.length - 10, 'more');
-        
-        // Build concrete examples from actual inventory
-        const exampleSel = sample[0]?.sel || 'button.primary-btn';
-        const exampleText = sample[0]?.text || 'Get Started';
-        const exampleTag = sample[0]?.tag || 'BUTTON';
-        const appTitle = sample.find(d => d.tag === 'H1' || d.tag === 'H2' || d.tag === 'H3')?.text || (appName || targetUrl || 'the app');
-        
-        const prompt = `You are a UX onboarding expert. Create an interactive DEMO for "${appName || targetUrl || 'the app'}" using the elements below.
 
-🎯 GOAL: Create a COMPLETE demo that walks through the app's main screens and actions. Use AS MANY elements as possible — every major interactive element in the inventory should appear in at least one step. A 1-step demo is a FAILURE; aim for 5-15 steps covering the key journey.
+        // Page content snapshot — gives the LLM full context about the page
+        const pc = pageContent || {};
+        const pcLines = [];
+        if (pc.title) pcLines.push('Page title: ' + pc.title);
+        if (pc.headings?.length) pcLines.push('Headings: ' + pc.headings.map(h => h.level + ': ' + h.text).join(' | '));
+        if (pc.nav?.length) pcLines.push('Navigation items: ' + pc.nav.join(', '));
+        if (pc.buttons?.length) pcLines.push('Buttons: ' + pc.buttons.join(', '));
+        if (pc.inputs?.length) pcLines.push('Form fields: ' + pc.inputs.join(', '));
+        if (pc.texts?.length) pcLines.push('Page content: ' + pc.texts.slice(0, 5).join(' | '));
+        if (pc.cards?.length) pcLines.push('Sections/cards: ' + pc.cards.join(', '));
+        const pageContentBlock = pcLines.length ? '\nPAGE CONTENT SNAPSHOT (visible content — use this to write SPECIFIC titles, NOT generic ones):\n' + pcLines.join('\n') + '\n' : '';
 
+        // User-provided description
+        const userBlock = userPrompt ? '\nUSER DESCRIPTION: "' + userPrompt + '"\nWrite the demo to match this description.\n' : '';
+
+        const appTitle = pc.title || pc.headings?.find(h => h.level === 'H1')?.text || sample.find(d => d.tag === 'H1' || d.tag === 'H2' || d.tag === 'H3')?.text || (appName || targetUrl || 'the app');
+        
+        const prompt = `You are a UX onboarding expert. Create an interactive DEMO for "${appName || targetUrl || 'the app'}".
+
+🎯 GOAL: Create a COMPLETE demo that walks through the app's main screens and actions. Use AS MANY elements as possible — every major interactive element should appear in at least one step. A 1-step demo is a FAILURE; aim for 5-15 steps covering the key journey.
+${userBlock}${pageContentBlock}
+DOM ELEMENTS — interactive targets (tag | text | label | css selector — copy sel EXACTLY):
+${inventoryLinesQuoted}
 ⚠️ CRITICAL RULES — VIOLATION MEANS YOUR OUTPUT WILL BE REJECTED:
-1. EVERY step's "sel" MUST BE AN EXACT COPY of a selector from the inventory below. NO exceptions, NO modifications, NO inventions.
-2. If an element is NOT in the inventory, you CANNOT reference it — do not hallucinate selectors.
-3. Chapter titles and step titles MUST describe the ACTUAL element text/label from the inventory — NEVER generic "first button", "second button", "first link", etc. Use the element's real text or label (e.g. "Sign In", "New Objective", "Dashboard", "Show password").
-4. Group steps into logical chapters (1-4 chapters). Each chapter should have 2-6 steps.
-5. The FIRST step should introduce the app's main entry point (hero CTA, logo, or main nav). 
-6. Output ONLY valid JSON (no markdown, no extra text, no explanations, no reasoning, no thinking process).
-7. PREFER elements with meaningful text/labels. If an inventory entry has a generic class-based text (MuiButtonBase-root, etc.), skip it unless it's the only option.
-
-DOM INVENTORY (tag | text | role | css selector — copy sel EXACTLY):
-${inventoryLines}
+1. EVERY step's "sel" MUST BE AN EXACT COPY of a selector from the DOM ELEMENTS above. NO exceptions, NO modifications, NO inventions.
+2. If an element is NOT in the list, you CANNOT reference it — do not hallucinate selectors.
+3. Step titles MUST be SPECIFIC and DESCRIPTIVE based on what the element DOES in the page context — e.g. "Open the dashboard sidebar", "Fill in your email", "Submit the form". NEVER use "first button", "second button", "first link", "root", "click here".
+4. Use the PAGE CONTENT SNAPSHOT to understand the page layout. The headings tell you what sections exist. The nav items tell you what screens are available. The buttons tell you what actions exist. Use this to write meaningful chapter titles and step descriptions.
+5. Group steps into logical chapters (1-4 chapters). Each chapter should have 2-6 steps.
+6. The FIRST step should introduce the app's main entry point (hero CTA, logo, or main nav).
+7. Output ONLY valid JSON (no markdown, no extra text, no explanations, no reasoning).
+8. Every "title" must reference a REAL, VISIBLE element's text or label — never a CSS class name or position.
 
 Output JSON shaped EXACTLY (use DEMO wording, not tour):
 {
@@ -279,9 +292,9 @@ Output JSON shaped EXACTLY (use DEMO wording, not tour):
       "title": "Getting Started",
       "steps": [
         {
-          "title": "Click ${exampleText}",
-          "body": "This ${exampleTag.toLowerCase()} ${exampleText.toLowerCase()} takes you to the main feature.",
-          "sel": "${exampleSel}",
+          "title": "Start the demo here",
+          "body": "This is the main entry point of ${appTitle}.",
+          "sel": "SEL_FROM_INVENTORY_HERE",
           "pos": "bottom",
           "action": false
         }
@@ -291,8 +304,8 @@ Output JSON shaped EXACTLY (use DEMO wording, not tour):
 }
 
 IMPORTANT: 
-- The example above uses "${exampleSel}" from the inventory. Use ONLY selectors from the inventory above — every "sel" value must be an EXACT match to one of the selectors listed.
-- Expand the example into a full demo: multiple chapters and steps, each using a DIFFERENT element from the inventory.
+- Replace "SEL_FROM_INVENTORY_HERE" with an EXACT selector from the DOM ELEMENTS list above.
+- Expand the example into a full demo: 1-4 chapters, 5-15 steps total, each using a DIFFERENT element from the inventory.
 - MINIMUM 5 steps total. Cover the key elements: buttons, links, nav, inputs, headings, images.
 - If the inventory has few elements, still use every single one.`;
 
@@ -390,12 +403,14 @@ IMPORTANT:
         }
 
         // NEW: Validate that all selectors in the response exist in the inventory
-        const validSelectors = new Set((dom || []).map(d => d.sel));
+        // (quote-insensitive: input[type='text'] matches input[type="text"])
+        const norm = s => String(s).replace(/["']/g, '"');
+        const validSelectors = new Set((dom || []).map(d => norm(d.sel)));
         const validationErrors = [];
         function validateSelectors(obj, path = '') {
           if (!obj || typeof obj !== 'object') return;
           if (obj.sel && typeof obj.sel === 'string') {
-            if (!validSelectors.has(obj.sel)) {
+            if (!validSelectors.has(norm(obj.sel))) {
               validationErrors.push(path + '.sel: "' + obj.sel + '" NOT IN INVENTORY');
             }
           }

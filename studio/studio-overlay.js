@@ -56,6 +56,9 @@
         <input id="studio-url" class="studio-url-input" type="url" placeholder="Enter app URL — e.g. http://localhost:3000" spellcheck="false">
         <button id="studio-connect" class="studio-btn studio-connect-btn">⟳ Connect</button>
       </div>
+      <div class="studio-prompt-row">
+        <textarea id="studio-prompt" class="studio-prompt" rows="2" placeholder="Describe what this page does (optional — AI uses this + auto-detected content)"></textarea>
+      </div>
       <div class="studio-hint" id="studio-hint">Pick mode: hover an element, click to add a step targeting it. Esc to cancel.</div>
       <div class="studio-split">
         <div class="studio-col">
@@ -369,6 +372,61 @@
   }
 
   // ── AI demo generation ──────────────────────────────────────
+
+  // Page content snapshot: gives the LLM a complete picture of what the page looks like
+  function collectPageContent() {
+    const content = { title: document.title, url: location.href, sections: [] };
+    // Headings
+    const headings = [];
+    document.querySelectorAll('h1, h2, h3, h4').forEach(h => {
+      const t = h.textContent.trim().replace(/\s+/g, ' ').slice(0, 100);
+      if (t) headings.push({ level: h.tagName, text: t });
+    });
+    content.headings = headings;
+    // Nav / sidebar items
+    const navItems = [];
+    document.querySelectorAll('nav a, [class*="sidebar"] a, [class*="sidebar"] li, [role="navigation"] a').forEach(el => {
+      const t = el.textContent.trim().replace(/\s+/g, ' ').slice(0, 60);
+      if (t) navItems.push(t);
+    });
+    content.nav = [...new Set(navItems)].slice(0, 20);
+    // Buttons (real text only, excluding DemoStudio's own UI)
+    const buttons = [];
+    const studioIds = ['studio-pick','studio-ai','studio-preview','studio-save','studio-export','studio-export-html','studio-export-player','studio-connect','studio-min','studio-close'];
+    document.querySelectorAll('button').forEach(b => {
+      if (b.id && studioIds.includes(b.id)) return;
+      if (b.closest('#demostudio-studio')) return;
+      const t = b.textContent.trim().replace(/\s+/g, ' ').slice(0, 60);
+      if (t && t.length > 1 && !/^(Start demo|Explore on my own|Skip demo|← Back|Next →|\+ New chapter)$/.test(t)) buttons.push(t);
+    });
+    content.buttons = [...new Set(buttons)].slice(0, 20);
+    // Form labels / placeholders (exclude studio's own inputs)
+    const inputs = [];
+    document.querySelectorAll('input, textarea, select').forEach(i => {
+      if (i.closest('#demostudio-studio')) return;
+      const ph = i.getAttribute('placeholder') || '';
+      const label = i.labels && i.labels[0] ? i.labels[0].textContent.trim() : '';
+      if (ph || label) inputs.push(label || ph);
+    });
+    content.inputs = [...new Set(inputs)].slice(0, 15);
+    // Visible paragraphs / description text
+    const texts = [];
+    document.querySelectorAll('p, [class*="desc"], [class*="subtitle"], [class*="summary"]').forEach(el => {
+      const t = el.textContent.trim().replace(/\s+/g, ' ').slice(0, 120);
+      if (t && t.length > 15) texts.push(t);
+    });
+    content.texts = [...new Set(texts)].slice(0, 10);
+    // Visible sections / cards
+    const cards = [];
+    document.querySelectorAll('[class*="card"], [class*="section"], [class*="panel"], [role="region"]').forEach(el => {
+      const h = el.querySelector('h1, h2, h3, h4, h5');
+      const t = h ? h.textContent.trim().replace(/\s+/g, ' ').slice(0, 60) : '';
+      if (t) cards.push(t);
+    });
+    content.cards = [...new Set(cards)].slice(0, 15);
+    return content;
+  }
+
   function collectDomInventory(max = 150) {
     const out = [];
     const seen = new Set();
@@ -450,18 +508,21 @@
     flash('✨ Analyzing page…');
     try {
       const dom = collectDomInventory();
+      const pageContent = collectPageContent();
       if (!dom.length) { flash('No interactive elements found on this page'); return; }
+      // User-provided prompt from textarea
+      const promptEl = document.querySelector('#studio-prompt');
+      const userPrompt = promptEl ? promptEl.value.trim() : '';
       flash('✨ Asking AI to design demo (' + dom.length + ' elements)…');
-      // Debug: log what we're sending
-      console.log('[Studio] DOM inventory collected (' + dom.length + ' elements):');
-      dom.slice(0, 15).forEach(d => console.log('[Studio]  ', d.sel, '|', d.tag, '|', d.text));
-      if (dom.length > 15) console.log('[Studio]  ... and', dom.length - 15, 'more');
+      console.log('[Studio] DOM inventory (' + dom.length + ' elements), page content snapshot sent');
 
       const res = await fetch('/__tour/studio/ai-generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           dom: dom.slice(0, 120),
+          pageContent: pageContent,
+          userPrompt: userPrompt,
           url: location.href,
           appName: document.title || cfg.appName || 'My App'
         })
