@@ -1,23 +1,30 @@
 /* ═══════════════════════════════════════════════════════════════
-   DemoStudio — click-to-build demo overlay editor.
-   Injected by the studio proxy into the target app. It:
-     • shows a floating toolbar (pick / preview / save / export)
-     • PICK mode: hover+click any real element → creates a step
-       targeting it (computes a robust CSS selector automatically)
-     • lets you edit title/body/position/action per step
-     • previews the demo live, saves config JSON to the server
-   ════════════════════════════════════════════════════════════════ */
+   DemoStudio Studio (Reprise AI Edition)
+   Injected into target app by studio proxy.
+   Features:
+     • 🚀 1-Click AI Auto-Demo (Scans DOM, captures snapshot, plans journey, outputs demo)
+     • 📸 Reprise DOM Snapshot Freeze (Offline sandbox capture)
+     • ✏️ In-Place Content Editor (Edit text & numbers live like Reprise)
+     • 🎯 Visual Element Picker with robust selector resolution
+     • 📦 Standalone Offline Zero-Server Demo Export
+   ═══════════════════════════════════════════════════════════════ */
 (() => {
-  if (window.__demoStudioStudioLoaded) return;
-  window.__demoStudioStudioLoaded = true;
+  if (window.__tourStudioLoaded) return;
+  window.__tourStudioLoaded = true;
+
+  // ── State ────────────────────────────────────────────────────
   const LS_KEY = 'demostudio_studio_draft';
-  let cfg = null;                    // current working config
+  let cfg = null;
   let pickMode = false;
-  let hoverBox = null;               // highlight while picking
+  let autoInspectMode = false;
+  let autoCaptureMode = false;
+  let editContentMode = false;
   let hoverEl = null;
-  let activeStepIdx = -1;            // selected step in list
+  let activeStepIdx = -1;
   let dirty = false;
-  let previewOn = false;
+  let capturedScreensList = [];
+  let currentScreenId = null;
+  let lastCapturedUrl = '';
 
   function loadDraft() {
     try {
@@ -29,198 +36,1300 @@
   loadDraft();
   if (!cfg.chapters) cfg.chapters = [];
 
-  // ── DOM ──────────────────────────────────────────────────────
+  // ── DOM Construction ─────────────────────────────────────────
   const wrap = document.createElement('div');
   wrap.id = 'demostudio-studio';
   wrap.innerHTML = `
     <div id="studio-panel">
       <div class="studio-head">
-        <span class="studio-drag-grip">⠿</span>
-        <div class="studio-title">🧭 DemoStudio</div>
+        <span class="material-symbols-outlined studio-drag-grip">drag_indicator</span>
+        <div class="studio-title">
+          <span>DemoStudio</span>
+          <span class="studio-badge">Editor</span>
+        </div>
         <span id="studio-save-state" class="studio-save-state"></span>
-        <button id="studio-min" title="Minimize studio">─</button>
-        <button id="studio-close" title="Close studio">✕</button>
+        <button id="studio-dashboard-btn" class="studio-head-btn" title="Return to Demos Dashboard">
+          <span class="material-symbols-outlined">dashboard</span>
+        </button>
+        <button id="studio-theme-toggle" class="studio-head-btn" title="Toggle Light / Dark Mode">
+          <span class="material-symbols-outlined" id="studio-theme-icon">dark_mode</span>
+        </button>
+        <button id="studio-switch-target" class="studio-head-btn" title="Change target website">
+          <span class="material-symbols-outlined">swap_horiz</span>
+        </button>
+        <button id="studio-min" class="studio-head-btn" title="Minimize">
+          <span class="material-symbols-outlined">remove</span>
+        </button>
+        <button id="studio-close" class="studio-head-btn" title="Close">
+          <span class="material-symbols-outlined">close</span>
+        </button>
       </div>
       <div class="studio-toolbar">
-        <button id="studio-pick" class="studio-btn studio-pick">🎯 Pick element</button>
-        <button id="studio-preview" class="studio-btn">▶ Preview</button>
-        <button id="studio-save" class="studio-btn studio-primary">💾 Save</button>
-        <button id="studio-export" class="studio-btn">⤓ Config</button>
-        <button id="studio-export-html" class="studio-btn">⤓ HTML</button>
-        <button id="studio-export-player" class="studio-btn">⤓ Player</button>
+        <button id="studio-ai-auto" class="studio-btn studio-ai-auto" title="Generate interactive walkthrough automatically">
+          <span class="material-symbols-outlined">auto_awesome</span>
+          <span>Auto Demo</span>
+        </button>
+        <button id="studio-ai-settings" class="studio-btn" title="Configure AI model and keys">
+          <span class="material-symbols-outlined">tune</span>
+          <span>Settings</span>
+        </button>
+        <button id="studio-auto-inspect" class="studio-btn" title="Auto Inspect: perform manual demo, capture clicks, inputs & screens, then generate AI tour">
+          <span class="material-symbols-outlined">smart_toy</span>
+          <span>Auto Inspect</span>
+        </button>
+        <button id="studio-auto-capture" class="studio-btn" title="Auto Capture: automatically capture screen DOM snapshots on clicks and navigation changes">
+          <span class="material-symbols-outlined">auto_videocam</span>
+          <span>Auto Capture</span>
+        </button>
+        <button id="studio-pick" class="studio-btn studio-pick" title="Select single element on the screen">
+          <span class="material-symbols-outlined">center_focus_strong</span>
+          <span>Inspect</span>
+        </button>
+        <button id="studio-snapshot" class="studio-btn" title="Capture DOM sandbox snapshot">
+          <span class="material-symbols-outlined">camera</span>
+          <span>Snapshot</span>
+        </button>
+        <button id="studio-edit-content" class="studio-btn" title="Edit content in-place">
+          <span class="material-symbols-outlined">edit_note</span>
+          <span>Edit Text</span>
+        </button>
+        <button id="studio-preview" class="studio-btn" title="Test interactive demo">
+          <span class="material-symbols-outlined">play_arrow</span>
+          <span>Preview</span>
+        </button>
+        <button id="studio-save" class="studio-btn studio-primary" title="Save demo configuration">
+          <span class="material-symbols-outlined">save</span>
+          <span>Save</span>
+        </button>
+        <button id="studio-export-standalone" class="studio-btn" title="Export standalone bundle">
+          <span class="material-symbols-outlined">download</span>
+          <span>Export</span>
+        </button>
       </div>
       <div class="studio-url-row">
-        <input id="studio-url" class="studio-url-input" type="url" placeholder="Enter app URL — e.g. http://localhost:3000" spellcheck="false">
-        <button id="studio-connect" class="studio-btn studio-connect-btn">⟳ Connect</button>
+        <span class="material-symbols-outlined studio-url-icon">public</span>
+        <input id="studio-url" class="studio-url-input" type="url" placeholder="Change website URL..." spellcheck="false">
+        <button id="studio-connect" class="studio-btn studio-connect-btn">
+          <span>Connect</span>
+        </button>
       </div>
-      <div class="studio-hint" id="studio-hint">Pick mode: hover an element, click to add a step targeting it. Esc to cancel.</div>
-      <div class="studio-split">
-        <div class="studio-col">
-          <div class="studio-col-head">Steps</div>
-          <div id="studio-chapters"></div>
+      <div class="studio-hint" id="studio-hint">
+        <span class="material-symbols-outlined" style="font-size:16px;">ads_click</span>
+        <span>Inspect mode active: click any element to anchor a step. Esc to cancel.</span>
+      </div>
+
+      <div class="studio-tabs">
+        <button class="studio-tab-btn active" data-tab="steps">
+          <span class="material-symbols-outlined">format_list_numbered</span>
+          <span>Steps & Flow</span>
+        </button>
+        <button class="studio-tab-btn" data-tab="screens">
+          <span class="material-symbols-outlined">layers</span>
+          <span>Screens (<span id="studio-screens-count">0</span>)</span>
+        </button>
+        <button class="studio-tab-btn" data-tab="agent">
+          <span class="material-symbols-outlined">psychology</span>
+          <span>AI Agent</span>
+        </button>
+      </div>
+
+      <div id="studio-view-steps" class="studio-view">
+        <div class="studio-split">
+          <div class="studio-col">
+            <div class="studio-col-head">Chapters & Steps</div>
+            <div id="studio-chapters"></div>
+          </div>
+          <div class="studio-col">
+            <div class="studio-col-head">Step Editor</div>
+            <div id="studio-editor"><div class="studio-empty">Select a step to edit, or click <b>Auto Demo</b> to generate a walkthrough.</div></div>
+          </div>
         </div>
-        <div class="studio-col">
-          <div class="studio-col-head">Step editor</div>
-          <div id="studio-editor"><div class="studio-empty">Select a step to edit, or 🎯 Pick an element to create one.</div></div>
+      </div>
+
+      <div id="studio-view-screens" class="studio-view" style="display:none;">
+        <div class="studio-screens-toolbar">
+          <h4>
+            <span class="material-symbols-outlined" style="font-size:16px;color:var(--md-primary);">devices</span>
+            <span>Captured Screen Graph</span>
+          </h4>
+          <button id="studio-add-screen" class="studio-btn studio-primary" style="padding:4px 10px;font-size:11.5px;">
+            <span class="material-symbols-outlined" style="font-size:14px;">add_a_photo</span>
+            <span>Capture Current</span>
+          </button>
+        </div>
+        <div id="studio-screens-list" class="studio-screens-grid">
+          <div class="studio-empty">No screens captured yet. Click <b>Capture Current</b> or run <b>Auto Demo</b>.</div>
+        </div>
+      </div>
+
+      <div id="studio-view-agent" class="studio-view" style="display:none;">
+        <div class="studio-chat-container">
+          <div id="studio-chat-msgs" class="studio-chat-msgs">
+            <div class="studio-chat-msg studio-chat-ai">
+              <div class="studio-chat-avatar"><span class="material-symbols-outlined">psychology</span></div>
+              <div class="studio-chat-bubble">
+                Hello! I am your AI Product Demo Architect. Ask me to refine your tour, summarize screens, add steps, or rewrite titles.
+              </div>
+            </div>
+          </div>
+          <div class="studio-chat-chips">
+            <button class="studio-chat-chip" data-prompt="Make all step titles punchy and concise">✨ Punchy titles</button>
+            <button class="studio-chat-chip" data-prompt="Add a step highlighting key navigation actions">🧭 Nav steps</button>
+            <button class="studio-chat-chip" data-prompt="Review this page and recommend a 3-step tour">💡 Recommend tour</button>
+            <button class="studio-chat-chip" data-prompt="Change accent color to modern vibrant indigo">🎨 Indigo accent</button>
+          </div>
+          <div class="studio-chat-input-row">
+            <input id="studio-agent-input" class="studio-chat-input" placeholder="Ask AI to edit tour, rewrite steps, or explain..." spellcheck="false" />
+            <button id="studio-agent-send" class="studio-chat-send" title="Send message">
+              <span class="material-symbols-outlined" style="font-size:18px;">arrow_upward</span>
+            </button>
+          </div>
         </div>
       </div>
     </div>
     <div id="studio-hover"></div>
   `;
   document.body.appendChild(wrap);
+
   const panel = wrap.querySelector('#studio-panel');
   const hint = wrap.querySelector('#studio-hint');
   const chaptersEl = wrap.querySelector('#studio-chapters');
   const editorEl = wrap.querySelector('#studio-editor');
 
-  // ── Draggable header ────────────────────────────────────────
-  const head = wrap.querySelector('.studio-head');
-  head.style.cursor = 'grab';
-  let dragging = false, dragOffX = 0, dragOffY = 0;
-
-  function onDragStart(e) {
-    if (e.target.closest('button') || e.target.closest('input')) return;
-    e.preventDefault();
-    dragging = true;
-    wrap.classList.add('studio-dragging');
-    head.style.cursor = 'grabbing';
-    const rect = wrap.getBoundingClientRect();
-    if (wrap.style.left === '' || wrap.style.left === 'auto') {
-      wrap.style.left = rect.left + 'px';
-      wrap.style.right = 'auto';
+  // Minimize / Restore Panel
+  const minBtn = wrap.querySelector('#studio-min');
+  const minIcon = minBtn.querySelector('.material-symbols-outlined');
+  function toggleMinimize(force) {
+    const isMin = typeof force === 'boolean' ? force : !panel.classList.contains('studio-minimized');
+    panel.classList.toggle('studio-minimized', isMin);
+    if (isMin) {
+      minIcon.textContent = 'open_in_full';
+      minBtn.title = 'Restore DemoStudio';
+      minBtn.setAttribute('aria-label', 'Restore DemoStudio');
+    } else {
+      minIcon.textContent = 'remove';
+      minBtn.title = 'Minimize';
+      minBtn.setAttribute('aria-label', 'Minimize');
     }
-    dragOffX = e.clientX - rect.left;
-    dragOffY = e.clientY - rect.top;
   }
-  function onDragMove(e) {
-    if (!dragging) return;
-    let x = e.clientX - dragOffX;
-    let y = e.clientY - dragOffY;
-    x = Math.max(0, Math.min(x, window.innerWidth - 60));
-    y = Math.max(0, Math.min(y, window.innerHeight - 40));
-    wrap.style.left = x + 'px';
-    wrap.style.top = y + 'px';
-  }
-  function onDragEnd() {
-    if (!dragging) return;
-    dragging = false;
-    wrap.classList.remove('studio-dragging');
-    head.style.cursor = 'grab';
-  }
-  head.addEventListener('mousedown', onDragStart);
-  document.addEventListener('mousemove', onDragMove);
-  document.addEventListener('mouseup', onDragEnd);
 
-  // ── Selector generation (robust CSS) ─────────────────────────
+  // Draggable Header
+  const head = wrap.querySelector('.studio-head');
+  let isDragging = false, hasDragged = false, startX, startY, initialX, initialY;
+  head.addEventListener('mousedown', e => {
+    if (e.target.closest('button')) return;
+    isDragging = true;
+    hasDragged = false;
+    startX = e.clientX;
+    startY = e.clientY;
+    const rect = wrap.getBoundingClientRect();
+    initialX = rect.left;
+    initialY = rect.top;
+  });
+  window.addEventListener('mousemove', e => {
+    if (!isDragging) return;
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+      hasDragged = true;
+      wrap.classList.add('studio-dragging');
+    }
+    wrap.style.left = `${initialX + dx}px`;
+    wrap.style.top = `${initialY + dy}px`;
+    wrap.style.right = 'auto';
+  });
+  window.addEventListener('mouseup', () => {
+    if (isDragging) {
+      isDragging = false;
+      wrap.classList.remove('studio-dragging');
+    }
+  });
+  head.addEventListener('click', e => {
+    if (e.target.closest('button')) return;
+    if (hasDragged) return;
+    // If minimized, clicking anywhere on the header restores it
+    if (panel.classList.contains('studio-minimized')) {
+      toggleMinimize(false);
+    }
+  });
+  head.addEventListener('dblclick', e => {
+    if (e.target.closest('button')) return;
+    toggleMinimize();
+  });
+
+  // ── Selector Engine ──────────────────────────────────────────
   function selectorFor(el) {
     if (!el || el === document.body || el === document.documentElement) return null;
-    // 1) id
-    if (el.id && /^[A-Za-z][\w:.-]*$/.test(el.id)) {
-      const s = '#' + CSS.escape(el.id);
-      if (document.querySelectorAll(s).length === 1) return s;
-    }
-    // 2) text-based for buttons/links/nav (human-readable)
-    const txt = (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 60);
-    if (txt && (el.tagName === 'BUTTON' || el.tagName === 'A' || el.tagName === 'NAV' ||
-                el.getAttribute('role') === 'button' || el.tagName === 'LI')) {
-      const tag = el.tagName.toLowerCase();
-      const base = tag + ':has-text("' + txt.replace(/"/g, '\\"') + '")';
-      // prefer scoped: tag.class:has-text
-      const cls = el.className && typeof el.className === 'string' ? el.className.split(/\s+/).filter(Boolean).slice(0, 1)[0] : '';
-      const scoped = cls ? tag + '.' + CSS.escape(cls) + ':has-text("' + txt.replace(/"/g, '\\"') + '")' : base;
-      // Only use text selector if it resolves uniquely
-      try { if (document.querySelectorAll(base).length === 1) return base; } catch (e) {}
-      try { if (document.querySelectorAll(scoped).length === 1) return scoped; } catch (e) {}
-    }
-    // 3) class chain
-    const cls = el.className && typeof el.className === 'string' ? el.className.split(/\s+/).filter(Boolean).slice(0, 2) : [];
-    if (cls.length) {
-      const s = el.tagName.toLowerCase() + cls.map(c => '.' + CSS.escape(c)).join('');
-      try { if (document.querySelectorAll(s).length === 1) return s; } catch (e) {}
-    }
-    // 4) nth-child path (last resort)
-    let parts = [];
-    let node = el;
-    while (node && node !== document.body && parts.length < 5) {
-      const parent = node.parentElement;
-      if (!parent) break;
-      const idx = [...parent.children].indexOf(node) + 1;
-      const tag = node.tagName.toLowerCase();
-      parts.unshift(tag + ':nth-child(' + idx + ')');
-      node = parent;
-    }
-    const fallback = parts.join(' > ');
-    try { if (document.querySelectorAll(fallback).length === 1) return fallback; } catch (e) {}
-    return fallback || null;
-  }
 
-  // ── Pick mode ────────────────────────────────────────────────
+    // 1) Unique ID (excluding auto-generated dynamic ids like react :r0:, numeric-only, etc.)
+    if (el.id && !/^\d/.test(el.id) && !/^[0-9a-f-]{25,}$/i.test(el.id)) {
+      try {
+        const s = '#' + CSS.escape(el.id);
+        if (document.querySelectorAll(s).length === 1) return s;
+      } catch (e) {}
+    }
+
+    // 2) Automation & Test attributes (data-testid, data-cy, data-test, data-qa)
+    for (const attr of ['data-testid', 'data-cy', 'data-test', 'data-qa']) {
+      const val = el.getAttribute(attr);
+      if (val) {
+        try {
+          const s = `[${attr}="${CSS.escape(val)}"]`;
+          if (document.querySelectorAll(s).length === 1) return s;
+          const tagS = `${el.tagName.toLowerCase()}[${attr}="${CSS.escape(val)}"]`;
+          if (document.querySelectorAll(tagS).length === 1) return tagS;
+        } catch (e) {}
+      }
+    }
+
+    // 3) Unique aria-label or role
+    const label = el.getAttribute('aria-label');
+    if (label) {
+      try {
+        const s = `${el.tagName.toLowerCase()}[aria-label="${CSS.escape(label)}"]`;
+        if (document.querySelectorAll(s).length === 1) return s;
+      } catch (e) {}
+    }
+
+    // 4) Unique Link href for navigation
+    if (el.tagName === 'A') {
+      const href = el.getAttribute('href');
+      if (href && href !== '#' && href !== 'javascript:void(0)' && !href.startsWith('mailto:') && !href.startsWith('tel:')) {
+        try {
+          const s = `a[href="${CSS.escape(href)}"]`;
+          if (document.querySelectorAll(s).length === 1) return s;
+        } catch (e) {}
+      }
+    }
+
+    // 5) Inputs: type, placeholder, name
+    if (el.tagName === 'INPUT' || el.tagName === 'SELECT' || el.tagName === 'TEXTAREA') {
+      const ph = el.getAttribute('placeholder');
+      if (ph) {
+        try {
+          const s = `${el.tagName.toLowerCase()}[placeholder="${CSS.escape(ph)}"]`;
+          if (document.querySelectorAll(s).length === 1) return s;
+        } catch (e) {}
+      }
+      const name = el.getAttribute('name');
+      if (name) {
+        try {
+          const s = `${el.tagName.toLowerCase()}[name="${CSS.escape(name)}"]`;
+          if (document.querySelectorAll(s).length === 1) return s;
+        } catch (e) {}
+      }
+      if (el.type) {
+        try {
+          const s = `input[type="${CSS.escape(el.type)}"]`;
+          if (document.querySelectorAll(s).length === 1) return s;
+        } catch (e) {}
+      }
+    }
+
+    // 6) Clean Class Selector
+    if (el.className && typeof el.className === 'string') {
+      const classes = el.className.split(/\s+/).filter(c => c && !/^\d/.test(c) && !c.startsWith('_') && !c.includes(':') && c.length > 2);
+      if (classes.length) {
+        try {
+          const s = el.tagName.toLowerCase() + '.' + classes.map(c => CSS.escape(c)).join('.');
+          if (document.querySelectorAll(s).length === 1) return s;
+        } catch (e) {}
+        for (const c of classes) {
+          try {
+            const s = `${el.tagName.toLowerCase()}.${CSS.escape(c)}`;
+            if (document.querySelectorAll(s).length === 1) return s;
+          } catch (e) {}
+        }
+      }
+    }
+
+    // 7) Robust hierarchical ascension (guaranteed strictly valid CSS matching exactly 1 element)
+    let curr = el;
+    const parts = [];
+    while (curr && curr !== document.body && curr !== document.documentElement && parts.length < 5) {
+      let seg = curr.tagName.toLowerCase();
+      if (curr.id && !/^\d/.test(curr.id) && !/^[0-9a-f-]{25,}$/i.test(curr.id)) {
+        try {
+          const testId = '#' + CSS.escape(curr.id);
+          if (document.querySelectorAll(testId).length === 1) {
+            parts.unshift(testId);
+            break;
+          }
+        } catch (e) {}
+      }
+
+      if (curr.className && typeof curr.className === 'string') {
+        const cls = curr.className.split(/\s+/).find(c => c && !/^\d/.test(c) && !c.startsWith('_') && !c.includes(':') && c.length > 2);
+        if (cls) seg += '.' + CSS.escape(cls);
+      }
+
+      if (curr.parentElement) {
+        const sibs = Array.from(curr.parentElement.children).filter(c => c.tagName === curr.tagName);
+        if (sibs.length > 1) {
+          const idx = sibs.indexOf(curr) + 1;
+          seg += `:nth-of-type(${idx})`;
+        }
+      }
+
+      parts.unshift(seg);
+      const candidate = parts.join(' > ');
+      try {
+        if (document.querySelectorAll(candidate).length === 1) return candidate;
+      } catch (e) {}
+
+      curr = curr.parentElement;
+    }
+
+    const fallback = parts.join(' > ');
+    return fallback || el.tagName.toLowerCase();
+  }
+  window.__studioSelectorFor = selectorFor;
+
+  // ── Single Element Pick Mode ──────────────────────────────────
+  const hoverBox = wrap.querySelector('#studio-hover');
+
   function setPick(on) {
     pickMode = on;
     document.body.classList.toggle('studio-picking', on);
-    hint.style.display = on ? 'block' : 'none';
-    document.querySelector('#studio-pick').classList.toggle('on', on);
-    // Auto-minimize panel during pick mode so user can see elements behind
-    panel.classList.toggle('studio-minimized', on);
-    if (!on) clearHover();
+
+    const pickBtn = wrap.querySelector('#studio-pick');
+    if (pickBtn) pickBtn.classList.toggle('on', on);
+
+    if (on) {
+      hint.style.display = 'flex';
+      hint.innerHTML = '<span class="material-symbols-outlined" style="font-size:16px;">ads_click</span><span>Inspect active: click any element to anchor a step. Esc to cancel.</span>';
+    } else {
+      if (hoverBox) hoverBox.style.display = 'none';
+      if (!isRecordingSession && !autoCaptureMode) hint.style.display = 'none';
+    }
   }
 
-  function clearHover() {
-    if (hoverBox) { hoverBox.remove(); hoverBox = null; }
-    hoverEl = null;
-  }
-
-  document.addEventListener('mousemove', (e) => {
+  window.addEventListener('mousemove', e => {
     if (!pickMode) return;
-    clearHover();
-    const el = e.target;
-    if (!el || el.closest('#demostudio-studio')) return;
-    const r = el.getBoundingClientRect();
-    if (r.width === 0 || r.height === 0) return;
-    hoverBox = document.createElement('div');
-    hoverBox.id = 'studio-hover';
-    hoverBox.style.cssText = `left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px;`;
-    document.body.appendChild(hoverBox);
-    hoverEl = el;
+    if (e.target.closest('#demostudio-studio, #demostudio-layer, #demostudio-launch, #studio-floating-toast, #studio-rec-bar')) {
+      hoverBox.style.display = 'none';
+      return;
+    }
+    hoverEl = e.target;
+    const r = hoverEl.getBoundingClientRect();
+    hoverBox.style.display = 'block';
+    hoverBox.style.top = `${r.top}px`;
+    hoverBox.style.left = `${r.left}px`;
+    hoverBox.style.width = `${r.width}px`;
+    hoverBox.style.height = `${r.height}px`;
   });
 
-  document.addEventListener('click', (e) => {
-    if (!pickMode) return;
+  window.addEventListener('click', async e => {
+    if (!pickMode || !hoverEl) return;
+    if (e.target.closest('#demostudio-studio, #demostudio-layer, #demostudio-launch, #studio-floating-toast, #studio-rec-bar')) return;
     e.preventDefault();
     e.stopPropagation();
-    const el = e.target;
-    if (el.closest('#demostudio-studio')) return;
-    clearHover();
-    const sel = selectorFor(el);
-    if (!sel) { flash('Could not generate a selector for that element'); return; }
-    addStep(el, sel);
+
+    const sel = selectorFor(hoverEl);
+    if (!sel) { flash('Could not generate selector'); return; }
+
+    const step = addStepForElement(hoverEl, sel);
     setPick(false);
+    showStudioToast(`Step added: "${step.title}"`, 'check');
   }, true);
 
-  // ── Step model ───────────────────────────────────────────────
-  function addStep(el, sel) {
-    // ensure a chapter exists
+  // ── Auto Inspect: Manual Demo Session Recorder & AI Tour Synthesis ──
+  let isRecordingSession = false;
+  let recordedSessionActions = [];
+  let recBarEl = null;
+
+  async function toggleAutoInspectSession() {
+    if (isRecordingSession) {
+      if (recordedSessionActions.length) {
+        await finishSessionAndGenerateAiTour();
+      } else {
+        stopSessionRecording();
+        showStudioToast('Demo recording canceled', 'close');
+      }
+    } else {
+      await startSessionRecording();
+    }
+  }
+
+  async function startSessionRecording() {
+    isRecordingSession = true;
+    recordedSessionActions = [];
+
+    // Enable auto capture so view/screen changes snapshot automatically
+    setAutoCapture(true);
+
+    // Snapshot initial view if none captured yet
+    if (!currentScreenId && window.__DemoStudioSnapshot) {
+      const id = await snapshotCurrentScreen(document.title || 'Screen 1');
+      if (id) {
+        currentScreenId = id;
+        lastCapturedUrl = window.location.pathname + window.location.search;
+        await fetchScreens();
+      }
+    }
+
+    // Minimize studio panel to avoid obstructing user's manual demo
+    const panel = wrap.querySelector('#studio-panel');
+    if (panel) panel.classList.add('studio-minimized');
+
+    const autoInspectBtn = wrap.querySelector('#studio-auto-inspect');
+    if (autoInspectBtn) {
+      autoInspectBtn.classList.add('on');
+      autoInspectBtn.innerHTML = '<span class="studio-rec-dot"></span><span>Recording Demo...</span>';
+    }
+
+    mountRecBar();
+    showStudioToast('Auto Inspect Active: Perform your manual demo, then click "Generate AI Demo Tour"!', 'smart_toy');
+    flash('Recording demo interactions in background');
+  }
+
+  function stopSessionRecording() {
+    isRecordingSession = false;
+    unmountRecBar();
+
+    const autoInspectBtn = wrap.querySelector('#studio-auto-inspect');
+    if (autoInspectBtn) {
+      autoInspectBtn.classList.remove('on');
+      autoInspectBtn.innerHTML = '<span class="material-symbols-outlined">smart_toy</span><span>Auto Inspect</span>';
+    }
+
+    const panel = wrap.querySelector('#studio-panel');
+    if (panel) panel.classList.remove('studio-minimized');
+  }
+
+  function mountRecBar() {
+    unmountRecBar();
+    recBarEl = document.createElement('div');
+    recBarEl.id = 'studio-rec-bar';
+    recBarEl.innerHTML = `
+      <div class="studio-rec-status">
+        <span class="studio-rec-pulse"></span>
+        <span class="studio-rec-label">RECORDING DEMO</span>
+      </div>
+      <div class="studio-rec-stats">
+        <span id="studio-rec-actions-count">0 actions</span> · <span id="studio-rec-screens-count">${capturedScreensList.length || 1} screens</span>
+      </div>
+      <div id="studio-rec-ticker" class="studio-rec-ticker">Perform your manual demo — clicks, inputs & pages are captured</div>
+      <div class="studio-rec-actions">
+        <button id="studio-rec-finish" class="studio-btn studio-primary" title="Finish manual demo and generate interactive AI tour">
+          <span class="material-symbols-outlined">auto_awesome</span>
+          <span>Generate AI Demo Tour</span>
+        </button>
+        <button id="studio-rec-cancel" class="studio-btn" title="Discard recorded demo">
+          <span class="material-symbols-outlined">close</span>
+        </button>
+      </div>
+    `;
+    document.body.appendChild(recBarEl);
+
+    recBarEl.querySelector('#studio-rec-finish').addEventListener('click', (e) => {
+      e.stopPropagation();
+      finishSessionAndGenerateAiTour();
+    });
+
+    recBarEl.querySelector('#studio-rec-cancel').addEventListener('click', (e) => {
+      e.stopPropagation();
+      stopSessionRecording();
+      showStudioToast('Demo recording canceled', 'close');
+    });
+  }
+
+  function unmountRecBar() {
+    if (recBarEl) {
+      recBarEl.remove();
+      recBarEl = null;
+    }
+  }
+
+  function updateRecBarStats() {
+    if (!recBarEl) return;
+    const actEl = recBarEl.querySelector('#studio-rec-actions-count');
+    const scrEl = recBarEl.querySelector('#studio-rec-screens-count');
+    const tickEl = recBarEl.querySelector('#studio-rec-ticker');
+    if (actEl) actEl.textContent = `${recordedSessionActions.length} action${recordedSessionActions.length === 1 ? '' : 's'}`;
+    if (scrEl) scrEl.textContent = `${capturedScreensList.length || 1} screen${capturedScreensList.length === 1 ? '' : 's'}`;
+    if (tickEl && recordedSessionActions.length) {
+      const last = recordedSessionActions[recordedSessionActions.length - 1];
+      if (last.type === 'input') {
+        tickEl.textContent = `Input: "${last.value || last.placeholder || 'Field'}"`;
+      } else {
+        tickEl.textContent = `Clicked: "${last.text || last.tag}"`;
+      }
+    }
+  }
+
+  // Passive observation of clicks during manual demo session
+  window.addEventListener('click', (e) => {
+    if (!isRecordingSession) return;
+    if (e.target.closest('#demostudio-studio, #studio-rec-bar, #studio-ai-modal, #studio-floating-toast')) return;
+
+    const target = e.target;
+    const sel = selectorFor(target);
+    if (!sel) return;
+
+    const text = (target.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 50);
+    const r = target.getBoundingClientRect();
+    const vh = window.innerHeight, vw = window.innerWidth;
+    const spaceBelow = vh - (r.top + r.height);
+    const spaceAbove = r.top;
+    let pos = 'bottom';
+    if (spaceBelow < 220 && spaceAbove >= 200) pos = 'top';
+    else if (r.left > vw * 0.72) pos = 'left';
+    else if (r.left + r.width < vw * 0.28) pos = 'right';
+
+    recordedSessionActions.push({
+      type: 'click',
+      tag: target.tagName,
+      role: target.getAttribute('role') || undefined,
+      text: text || undefined,
+      sel: sel,
+      pos: pos,
+      screenId: currentScreenId || undefined,
+      screenName: capturedScreensList.find(s => s.id === currentScreenId)?.name || document.title,
+      timestamp: Date.now()
+    });
+
+    updateRecBarStats();
+  }, true);
+
+  // Passive observation of form inputs during manual demo session
+  let sessionInputTimer = null;
+  window.addEventListener('input', (e) => {
+    if (!isRecordingSession) return;
+    if (e.target.closest('#demostudio-studio, #studio-rec-bar, #studio-ai-modal, #studio-floating-toast')) return;
+
+    const target = e.target;
+    if (!['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
+
+    clearTimeout(sessionInputTimer);
+    sessionInputTimer = setTimeout(() => {
+      const sel = selectorFor(target);
+      if (!sel) return;
+      const val = target.value || '';
+      const placeholder = target.getAttribute('placeholder') || '';
+      const label = target.labels?.[0]?.textContent || target.name || placeholder;
+
+      const last = recordedSessionActions[recordedSessionActions.length - 1];
+      if (last && last.type === 'input' && last.sel === sel) {
+        last.value = val;
+        last.timestamp = Date.now();
+      } else {
+        recordedSessionActions.push({
+          type: 'input',
+          tag: target.tagName,
+          placeholder: placeholder || undefined,
+          label: label ? label.trim().slice(0, 40) : undefined,
+          value: val.slice(0, 60),
+          sel: sel,
+          pos: 'bottom',
+          screenId: currentScreenId || undefined,
+          screenName: capturedScreensList.find(s => s.id === currentScreenId)?.name || document.title,
+          timestamp: Date.now()
+        });
+      }
+      updateRecBarStats();
+    }, 350);
+  }, true);
+
+  async function finishSessionAndGenerateAiTour() {
+    if (!recordedSessionActions.length) {
+      flash('No demo actions recorded yet. Please click buttons, enter text, or navigate.');
+      return;
+    }
+
+    showAiSynthesisModal();
+
+    try {
+      const key = localStorage.getItem('demostudio_ai_key') || '';
+      const endpoint = localStorage.getItem('demostudio_ai_endpoint') || '';
+      const model = localStorage.getItem('demostudio_ai_model') || '';
+
+      const res = await fetch('/__tour/studio/ai-generate-session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          recordedActions: recordedSessionActions,
+          capturedScreens: capturedScreensList,
+          appName: cfg.appName || document.title || 'Product Tour',
+          url: window.location.href,
+          apiKey: key,
+          llmEndpoint: endpoint,
+          llmModel: model
+        })
+      });
+
+      const data = await res.json();
+      hideAiSynthesisModal();
+
+      if (data.ok && data.config) {
+        stopSessionRecording();
+
+        cfg.chapters = data.config.chapters || cfg.chapters;
+        if (data.config.appName) cfg.appName = data.config.appName;
+        if (data.config.launchTitle) cfg.launchTitle = data.config.launchTitle;
+        if (data.config.launchBody) cfg.launchBody = data.config.launchBody;
+
+        dirty = true;
+        renderChapters();
+        renderEditor();
+        await save();
+
+        showStudioToast('AI Interactive Tour Synthesized Successfully!', 'auto_awesome');
+        flash('Interactive guided tour created from your demo session!');
+
+        // Immediately trigger interactive preview
+        setTimeout(() => preview(), 400);
+      } else {
+        showStudioToast('AI Generation failed: ' + (data.error || 'Server error'), 'error');
+        flash('AI error: ' + (data.error || 'Server error'));
+      }
+    } catch (err) {
+      hideAiSynthesisModal();
+      console.error('[Session AI Error]', err);
+      flash('Error generating AI tour: ' + err.message);
+    }
+  }
+
+  function showAiSynthesisModal() {
+    hideAiSynthesisModal();
+    const modal = document.createElement('div');
+    modal.id = 'studio-ai-modal';
+    modal.innerHTML = `
+      <div class="studio-ai-modal-card">
+        <div class="studio-ai-spinner"></div>
+        <div class="studio-ai-modal-title">Crafting Interactive Tour</div>
+        <div class="studio-ai-modal-sub">AI is analyzing your manual demo interactions, structuring narrative chapters, and generating professional product copy...</div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+  }
+
+  function hideAiSynthesisModal() {
+    const modal = document.querySelector('#studio-ai-modal');
+    if (modal) modal.remove();
+  }
+
+  function addStepForElement(el, sel) {
     if (!cfg.chapters.length) {
       cfg.chapters.push({ title: 'Chapter 1', steps: [] });
     }
     const ch = cfg.chapters[cfg.chapters.length - 1];
-    const label = (el.textContent || el.getAttribute('aria-label') || el.tagName).trim().replace(/\s+/g, ' ').slice(0, 50);
+    const text = (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 30);
     const step = {
-      title: label ? 'Click "' + label + '"' : 'Interact with ' + el.tagName.toLowerCase(),
-      body: 'This element is: ' + label + '. Edit this description.',
-      sel,
+      title: text ? `Explore ${text}` : 'Action Step',
+      body: `Click here to interact with this feature.`,
+      sel: sel,
       pos: 'bottom',
       action: true
     };
+    if (currentScreenId) {
+      step.screenId = currentScreenId;
+    }
     ch.steps.push(step);
     activeStepIdx = ch.steps.length - 1;
     dirty = true;
     renderChapters();
     renderEditor();
-    flash('Step added: ' + sel);
+    flash(`Step added for: ${sel}`);
+    return step;
   }
 
-  // ── Rendering ────────────────────────────────────────────────
+  // ── Auto-Capture Mode (Continuous Reprise Screen Recording) ──
+  let autoCaptureTimer = null;
+  let autoCaptureActive = false;
+  let hasHookedHistory = false;
+  let origPushState = null;
+  let origReplaceState = null;
+
+  function setAutoCapture(on) {
+    autoCaptureMode = on;
+    const btn = wrap.querySelector('#studio-auto-capture');
+    if (btn) {
+      btn.classList.toggle('on', on);
+      btn.innerHTML = on
+        ? '<span class="studio-rec-dot"></span><span>Auto Capturing</span>'
+        : '<span class="material-symbols-outlined">auto_videocam</span><span>Auto Capture</span>';
+    }
+
+    if (on) {
+      if (!pickMode) {
+        hint.style.display = 'flex';
+        hint.innerHTML = '<span class="material-symbols-outlined" style="font-size:16px;">auto_videocam</span><span><b>Auto-Capture Active:</b> Navigating pages, tabs, or routes automatically captures screens.</span>';
+      }
+      showStudioToast('Auto-Capture Active: View changes will snapshot automatically', 'auto_videocam');
+      flash('Auto Capture enabled');
+      startAutoCaptureObserver();
+
+      // Capture initial view if none captured yet
+      if (!currentScreenId && window.__DemoStudioSnapshot) {
+        snapshotCurrentScreen(document.title || 'Screen 1').then(id => {
+          if (id) {
+            currentScreenId = id;
+            lastCapturedUrl = window.location.pathname + window.location.search;
+            fetchScreens();
+          }
+        });
+      }
+    } else {
+      if (!pickMode) hint.style.display = 'none';
+      showStudioToast('Auto-Capture disabled', 'stop');
+      flash('Auto Capture disabled');
+      stopAutoCaptureObserver();
+    }
+  }
+
+  function triggerAutoCapture(reason = 'Navigation') {
+    if (!autoCaptureMode || !window.__DemoStudioSnapshot) return;
+    clearTimeout(autoCaptureTimer);
+    autoCaptureTimer = setTimeout(async () => {
+      const curUrl = window.location.pathname + window.location.search;
+      const title = document.title || (curUrl !== '/' ? curUrl : ('Screen ' + (capturedScreensList.length + 1)));
+      const prevScreenId = currentScreenId;
+
+      const newId = await snapshotCurrentScreen(title);
+      if (newId) {
+        currentScreenId = newId;
+        lastCapturedUrl = curUrl;
+        await fetchScreens();
+        showStudioToast(`📸 Screen captured: "${title}"`, 'camera');
+
+        // If last step in active chapter has no targetScreen and this is a new screen, link it!
+        if (cfg.chapters?.length) {
+          const ch = cfg.chapters[cfg.chapters.length - 1];
+          if (ch.steps?.length) {
+            const lastStep = ch.steps[ch.steps.length - 1];
+            if (prevScreenId && prevScreenId !== newId && !lastStep.targetScreen) {
+              lastStep.targetScreen = newId;
+              dirty = true;
+              renderEditor();
+            }
+          }
+        }
+
+        if (isRecordingSession) {
+          if (recordedSessionActions.length) {
+            const prev = recordedSessionActions[recordedSessionActions.length - 1];
+            if (prevScreenId && prevScreenId !== newId && !prev.targetScreen) {
+              prev.targetScreen = newId;
+            }
+          }
+          updateRecBarStats();
+        }
+      }
+    }, 450);
+  }
+
+  function startAutoCaptureObserver() {
+    if (autoCaptureActive) return;
+    autoCaptureActive = true;
+
+    if (!hasHookedHistory) {
+      hasHookedHistory = true;
+      origPushState = window.history.pushState;
+      origReplaceState = window.history.replaceState;
+
+      window.history.pushState = function(...args) {
+        const res = origPushState.apply(this, args);
+        if (autoCaptureMode) triggerAutoCapture('pushState');
+        return res;
+      };
+      window.history.replaceState = function(...args) {
+        const res = origReplaceState.apply(this, args);
+        if (autoCaptureMode) triggerAutoCapture('replaceState');
+        return res;
+      };
+    }
+
+    window.addEventListener('popstate', onPopStateAutoCapture);
+    window.addEventListener('hashchange', onPopStateAutoCapture);
+    document.addEventListener('click', onInteractiveNavClick, true);
+  }
+
+  function stopAutoCaptureObserver() {
+    autoCaptureActive = false;
+    clearTimeout(autoCaptureTimer);
+    window.removeEventListener('popstate', onPopStateAutoCapture);
+    window.removeEventListener('hashchange', onPopStateAutoCapture);
+    document.removeEventListener('click', onInteractiveNavClick, true);
+  }
+
+  function onPopStateAutoCapture() {
+    if (autoCaptureMode) triggerAutoCapture('popstate');
+  }
+
+  function onInteractiveNavClick(e) {
+    if (!autoCaptureMode) return;
+    if (pickMode) return; // In pick mode, handled by element click
+    if (e.target.closest('#demostudio-studio, #demostudio-layer, #demostudio-launch, #studio-floating-toast')) return;
+
+    const navEl = e.target.closest('a, button, [role="button"], [role="tab"], [role="menuitem"], nav *');
+    if (navEl) {
+      triggerAutoCapture('userClick');
+    }
+  }
+
+  function showStudioToast(msg, icon = 'check_circle') {
+    let toast = document.getElementById('studio-floating-toast');
+    if (!toast) {
+      toast = document.createElement('div');
+      toast.id = 'studio-floating-toast';
+      document.body.appendChild(toast);
+    }
+    toast.className = '';
+    toast.innerHTML = `
+      <span class="material-symbols-outlined" style="color:var(--md-primary);font-size:18px;">${icon}</span>
+      <span>${esc(msg)}</span>
+    `;
+    toast.style.display = 'flex';
+    clearTimeout(toast._t);
+    toast._t = setTimeout(() => {
+      toast.classList.add('hiding');
+      setTimeout(() => { toast.style.display = 'none'; }, 250);
+    }, 2500);
+  }
+
+  // ── Reprise In-Place Content Editor ──────────────────────────
+  function toggleContentEditing(force) {
+    editContentMode = force !== undefined ? force : !editContentMode;
+    document.body.classList.toggle('studio-content-editing', editContentMode);
+    wrap.querySelector('#studio-edit-content').classList.toggle('on', editContentMode);
+
+    let banner = document.getElementById('studio-content-edit-banner');
+    if (editContentMode) {
+      if (!banner) {
+        banner = document.createElement('div');
+        banner.id = 'studio-content-edit-banner';
+        banner.innerHTML = `
+          <span><span class="status-dot"></span> In-Place Content Editor Active — Click any text or metric on the page to customize.</span>
+          <button onclick="window.__tourStudio.toggleContentEditing(false)">Done</button>
+        `;
+        document.body.appendChild(banner);
+      }
+      banner.style.display = 'flex';
+
+      // Make text elements editable
+      document.querySelectorAll('h1, h2, h3, h4, h5, h6, p, span, a, td, th, label, button').forEach(el => {
+        if (!el.closest('#demostudio-studio, #studio-content-edit-banner')) {
+          el.setAttribute('contenteditable', 'true');
+        }
+      });
+      flash('Content editing enabled. Click any text to modify.');
+    } else {
+      if (banner) banner.style.display = 'none';
+      document.querySelectorAll('[contenteditable="true"]').forEach(el => {
+        el.removeAttribute('contenteditable');
+      });
+      flash('Content editing turned off.');
+    }
+  }
+
+  // ── Reprise Screen Snapshot Capture ──────────────────────────
+  async function snapshotCurrentScreen(customName) {
+    if (!window.__DemoStudioSnapshot) {
+      flash('Snapshot engine not ready');
+      return null;
+    }
+    flash('Capturing screen state…');
+    const screenId = 'screen_' + Date.now();
+    const screenName = customName || document.title || ('Screen ' + ((cfg.chapters?.length || 0) + 1));
+    const captured = window.__DemoStudioSnapshot.captureScreen(screenId, screenName);
+
+    try {
+      const res = await fetch('/__tour/studio/snapshot', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          screenId,
+          screenName,
+          html: captured.html,
+          meta: captured.meta
+        })
+      });
+      const data = await res.json();
+      if (data.ok) {
+        flash(`Snapshot saved (${data.totalScreens} screens in sandbox)`);
+        return screenId;
+      }
+    } catch (e) {
+      console.warn('Snapshot error:', e);
+    }
+    return screenId;
+  }
+
+  // ── AI Settings Modal ───────────────────────────────────────
+  function showAiSettingsModal() {
+    let modal = document.getElementById('studio-ai-modal');
+    if (!modal) {
+      modal = document.createElement('div');
+      modal.id = 'studio-ai-modal';
+      modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.75);backdrop-filter:blur(8px);display:flex;align-items:center;justify-content:center;z-index:2147483600;font-family:inherit;';
+      document.body.appendChild(modal);
+    }
+
+    const savedProvider = localStorage.getItem('demostudio_ai_provider') || 'gemini';
+    const savedKey = localStorage.getItem('demostudio_ai_key') || '';
+    const savedEndpoint = localStorage.getItem('demostudio_ai_endpoint') || '';
+    const savedModel = localStorage.getItem('demostudio_ai_model') || (savedProvider === 'gemini' ? 'gemini-2.5-flash' : '');
+
+    modal.innerHTML = `
+      <div style="background:var(--md-sys-color-surface-container, #1e1f25);border:1px solid var(--md-sys-color-outline-variant, #44474f);border-radius:24px;padding:28px;width:480px;max-width:92%;color:#e2e2e9;box-shadow:0 8px 32px rgba(0,0,0,0.6);font-family:'Roboto', sans-serif;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <div style="width:36px;height:36px;border-radius:10px;background:#0842a0;color:#d3e3fd;display:flex;align-items:center;justify-content:center;">
+              <span class="material-symbols-outlined" style="font-size:20px;">psychology</span>
+            </div>
+            <div>
+              <h3 style="font-size:16px;font-weight:500;color:#e2e2e9;margin:0;">Intelligence Settings</h3>
+              <div style="font-size:11.5px;color:#8e9099;">Configure AI models for tour generation</div>
+            </div>
+          </div>
+          <button id="ai-modal-close" style="background:none;border:none;color:#8e9099;font-size:20px;cursor:pointer;padding:4px;border-radius:50%;display:flex;align-items:center;justify-content:center;">
+            <span class="material-symbols-outlined">close</span>
+          </button>
+        </div>
+
+        <div style="margin-top:18px;margin-bottom:14px;">
+          <label style="display:block;font-size:11px;font-weight:500;color:#a8c7fa;margin-bottom:6px;letter-spacing:0.02em;">PROVIDER</label>
+          <select id="ai-modal-provider" style="width:100%;height:44px;padding:0 12px;border-radius:12px;background:#282a30;border:1px solid #44474f;color:#e2e2e9;font-size:13px;outline:none;font-family:inherit;">
+            <option value="gemini" ${savedProvider === 'gemini' ? 'selected' : ''}>Google Gemini (Recommended)</option>
+            <option value="openrouter" ${savedProvider === 'openrouter' ? 'selected' : ''}>OpenRouter</option>
+            <option value="groq" ${savedProvider === 'groq' ? 'selected' : ''}>Groq</option>
+            <option value="openai" ${savedProvider === 'openai' ? 'selected' : ''}>OpenAI</option>
+            <option value="local" ${savedProvider === 'local' ? 'selected' : ''}>Local LLM (LM Studio / Ollama)</option>
+            <option value="heuristic" ${savedProvider === 'heuristic' ? 'selected' : ''}>Built-In Heuristics (No Key Needed)</option>
+          </select>
+        </div>
+
+        <div id="ai-key-row" style="margin-bottom:14px;">
+          <label id="ai-key-label" style="display:block;font-size:11px;font-weight:500;color:#a8c7fa;margin-bottom:6px;letter-spacing:0.02em;">
+            ${savedProvider === 'gemini' ? 'GEMINI API KEY' : 'API KEY'}
+          </label>
+          <input id="ai-modal-key" type="password" placeholder="${savedProvider === 'gemini' ? 'AIzaSy... (from aistudio.google.com)' : 'sk-...'}" value="${escAttr(savedKey)}" style="width:100%;height:44px;padding:0 12px;border-radius:12px;background:#282a30;border:1px solid #44474f;color:#e2e2e9;font-size:13px;outline:none;font-family:inherit;" />
+          <div id="ai-key-hint" style="font-size:11px;color:#a8c7fa;margin-top:6px;">
+            ${savedProvider === 'gemini' ? 'Get a free key from <a href="https://aistudio.google.com" target="_blank" style="color:#a8c7fa;text-decoration:underline;">aistudio.google.com</a>' : ''}
+          </div>
+        </div>
+
+        <div style="margin-bottom:14px;">
+          <label style="display:block;font-size:11px;font-weight:500;color:#a8c7fa;margin-bottom:6px;letter-spacing:0.02em;">MODEL IDENTIFIER</label>
+          <input id="ai-modal-model" type="text" placeholder="gemini-2.5-flash" value="${escAttr(savedModel || 'gemini-2.5-flash')}" style="width:100%;height:44px;padding:0 12px;border-radius:12px;background:#282a30;border:1px solid #44474f;color:#e2e2e9;font-size:13px;outline:none;font-family:inherit;" />
+        </div>
+
+        <div id="ai-endpoint-row" style="margin-bottom:20px; ${savedProvider === 'local' ? '' : 'display:none;'}">
+          <label style="display:block;font-size:11px;font-weight:500;color:#a8c7fa;margin-bottom:6px;letter-spacing:0.02em;">CUSTOM ENDPOINT</label>
+          <input id="ai-modal-endpoint" type="text" placeholder="http://localhost:1234/v1/chat/completions" value="${escAttr(savedEndpoint)}" style="width:100%;height:44px;padding:0 12px;border-radius:12px;background:#282a30;border:1px solid #44474f;color:#e2e2e9;font-size:13px;outline:none;font-family:inherit;" />
+        </div>
+
+        <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:10px;">
+          <button id="ai-modal-cancel" style="height:40px;padding:0 18px;border-radius:9999px;background:#282a30;border:1px solid #44474f;color:#e2e2e9;font-size:13px;cursor:pointer;font-weight:500;">Cancel</button>
+          <button id="ai-modal-save" style="height:40px;padding:0 22px;border-radius:9999px;background:#a8c7fa;border:none;color:#062e6f;font-weight:500;font-size:13px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;">
+            <span class="material-symbols-outlined" style="font-size:18px;">check</span>
+            <span>Save Settings</span>
+          </button>
+        </div>
+      </div>
+    `;
+    modal.style.display = 'flex';
+
+    const provSelect = document.getElementById('ai-modal-provider');
+    const keyLabel = document.getElementById('ai-key-label');
+    const keyInput = document.getElementById('ai-modal-key');
+    const keyHint = document.getElementById('ai-key-hint');
+    const modelInput = document.getElementById('ai-modal-model');
+    const endRow = document.getElementById('ai-endpoint-row');
+
+    provSelect.onchange = () => {
+      const p = provSelect.value;
+      if (p === 'gemini') {
+        keyLabel.textContent = 'Gemini API Key';
+        keyInput.placeholder = 'AIzaSy... (from aistudio.google.com)';
+        keyHint.innerHTML = 'Get a free Gemini key at <a href="https://aistudio.google.com" target="_blank" style="color:#60a5fa;">aistudio.google.com</a>';
+        if (!modelInput.value || modelInput.value.includes('openrouter')) modelInput.value = 'gemini-2.5-flash';
+        endRow.style.display = 'none';
+      } else if (p === 'local') {
+        keyLabel.textContent = 'API Key (Optional)';
+        keyInput.placeholder = 'not-needed';
+        keyHint.textContent = 'Connects to LM Studio or Ollama on your machine';
+        endRow.style.display = 'block';
+        if (!document.getElementById('ai-modal-endpoint').value) {
+          document.getElementById('ai-modal-endpoint').value = 'http://localhost:1234/v1/chat/completions';
+        }
+      } else {
+        keyLabel.textContent = 'API Key';
+        keyInput.placeholder = 'sk-...';
+        keyHint.textContent = '';
+        endRow.style.display = 'none';
+      }
+    };
+
+    document.getElementById('ai-modal-close').onclick = () => modal.style.display = 'none';
+    document.getElementById('ai-modal-cancel').onclick = () => modal.style.display = 'none';
+    document.getElementById('ai-modal-save').onclick = () => {
+      const provider = provSelect.value;
+      const key = (keyInput.value || '').trim();
+      const endpoint = (document.getElementById('ai-modal-endpoint').value || '').trim();
+      const model = (modelInput.value || '').trim();
+
+      localStorage.setItem('demostudio_ai_provider', provider);
+      localStorage.setItem('demostudio_ai_key', key);
+      localStorage.setItem('demostudio_ai_endpoint', endpoint);
+      localStorage.setItem('demostudio_ai_model', model);
+
+      modal.style.display = 'none';
+      flash(`Connected: ${provider === 'gemini' ? 'Google Gemini' : provider}`);
+    };
+  }
+
+  // ── DOM Inventory Collection for AI ──────────────────────────
+  function collectDomInventory(max = 100) {
+    const rawElements = [];
+    const seen = new Set();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+
+    // Primary query for rich semantic and interactive targets
+    let all = [
+      ...document.querySelectorAll(
+        'button, a, nav, input, select, textarea, h1, h2, h3, h4, [role="button"], [role="navigation"], [role="search"], [role="tab"], [role="link"], [data-testid], [aria-label], table, [class*="card"], [class*="stat"], [class*="kpi"], [class*="item"], [class*="btn"], [class*="button"], [class*="menu"], [class*="nav"], header, section, main, [tabindex="0"]'
+      )
+    ];
+
+    // Fallback: If SPA has custom div/span structures, query clickable or meaningful text blocks
+    if (all.length < 5) {
+      const fallbackNodes = document.querySelectorAll('#root *, #app *, main *, body > div *');
+      for (const node of fallbackNodes) {
+        if (node.children.length === 0 && (node.textContent || '').trim().length > 2) {
+          all.push(node);
+        }
+      }
+    }
+
+    for (const el of all) {
+      if (el.closest('#demostudio-studio, #demostudio-layer, #demostudio-launch, #studio-content-edit-banner, #studio-ai-modal')) continue;
+
+      // Exclude script, style, noscript, svg paths
+      if (['SCRIPT', 'STYLE', 'NOSCRIPT', 'PATH', 'DEFS'].includes(el.tagName)) continue;
+
+      // Exclude footers, copyright, and legal areas
+      if (el.closest('footer, #footer, .footer, [role="contentinfo"], .legal, .copyright')) continue;
+
+      // Exclude cookie consent and tracking banners
+      if (el.closest('[class*="cookie" i], [id*="cookie" i], [aria-label*="cookie" i], [class*="consent" i], [id*="consent" i]')) continue;
+
+      // Filter out invisible / hidden / zero-sized elements
+      const r = el.getBoundingClientRect();
+      if (r.width < 4 || r.height < 4) continue;
+      const comp = window.getComputedStyle(el);
+      if (comp.display === 'none' || comp.visibility === 'hidden' || comp.opacity === '0') continue;
+
+      const tag = el.tagName.toUpperCase();
+      const text = (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 70);
+      const aria = el.getAttribute('aria-label') || '';
+      const ph = el.getAttribute('placeholder') || '';
+      const desc = text || aria || ph || el.id || '';
+      if (!desc && tag !== 'INPUT') continue;
+
+      const sel = selectorFor(el);
+      if (!sel || seen.has(sel)) continue;
+      seen.add(sel);
+
+      // Semantic Zone Classification
+      let zone = 'content';
+      const isAboveFold = r.top < vh;
+
+      if (el.closest('nav, [role="navigation"], header, .navbar, .menu, #sidebar, aside') || (tag === 'A' && r.top < 120)) {
+        zone = 'navigation';
+      } else if (isAboveFold && (tag === 'H1' || tag === 'H2' || el.closest('.hero, [class*="hero" i], .banner, .jumbotron'))) {
+        zone = 'hero';
+      } else if (tag === 'BUTTON' || el.getAttribute('role') === 'button' || el.classList.contains('btn') || el.classList.contains('button')) {
+        zone = 'action';
+      } else if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || el.getAttribute('role') === 'search') {
+        zone = 'input';
+      } else if (el.closest('.stat, .kpi, .card, [class*="stat" i], [class*="kpi" i], [class*="metric" i]') || tag === 'TABLE') {
+        zone = 'stat';
+      }
+
+      // Optimal Tooltip Position (Collision-free pre-calculation)
+      let optimalPos = 'bottom';
+      const spaceBelow = vh - (r.top + r.height);
+      const spaceAbove = r.top;
+
+      if (spaceBelow < 220 && spaceAbove >= 200) {
+        optimalPos = 'top';
+      } else if (spaceAbove < 220 && spaceBelow >= 200) {
+        optimalPos = 'bottom';
+      } else if (r.left > vw * 0.72) {
+        optimalPos = 'left';
+      } else if (r.left + r.width < vw * 0.28) {
+        optimalPos = 'right';
+      } else {
+        optimalPos = spaceBelow >= spaceAbove ? 'bottom' : 'top';
+      }
+
+      // Prominence Scoring
+      let score = 0;
+      if (isAboveFold) score += 50;
+      if (zone === 'hero') score += 100;
+      else if (zone === 'action') score += 80;
+      else if (zone === 'input') score += 75;
+      else if (zone === 'navigation') score += 60;
+      else if (zone === 'stat') score += 45;
+      else score += 20;
+
+      if (tag === 'H1') score += 60;
+      else if (tag === 'H2') score += 40;
+      else if (tag === 'BUTTON' || el.getAttribute('role') === 'button') score += 35;
+      else if (tag === 'INPUT' && (ph.toLowerCase().includes('search') || el.type === 'search')) score += 35;
+
+      const area = r.width * r.height;
+      if (area > 3000) score += 15;
+      if (area > 15000) score += 15;
+
+      // Penalties for tiny or very deep elements
+      if (r.top > vh * 2) score -= 50;
+      if (r.width < 20 || r.height < 20) score -= 25;
+
+      rawElements.push({
+        tag,
+        text: desc,
+        role: el.getAttribute('role') || '',
+        sel,
+        zone,
+        optimalPos,
+        score,
+        top: Math.round(r.top),
+        left: Math.round(r.left)
+      });
+    }
+
+    // Sort by prominence score so AI gets the most impactful elements first
+    rawElements.sort((a, b) => b.score - a.score);
+    return rawElements.slice(0, max);
+  }
+
+  // Helper: Wait for SPA DOM hydration if needed
+  async function waitForElements(maxWaitMs = 2500) {
+    let elements = collectDomInventory();
+    if (elements.length >= 3) return elements;
+
+    const start = Date.now();
+    while (Date.now() - start < maxWaitMs) {
+      await new Promise(r => setTimeout(r, 300));
+      elements = collectDomInventory();
+      if (elements.length >= 3) return elements;
+    }
+    return elements;
+  }
+
+  // ── 1-Click AI Auto-Demo (Zero Manual Effort) ─────────────────
+  async function aiAutoDemo() {
+    const btn = document.querySelector('#studio-ai-auto');
+    btn.disabled = true;
+    const orig = btn.textContent;
+    btn.textContent = 'Generating…';
+
+    try {
+      // Step 1: Capture DOM snapshot of the screen
+      flash('Capturing screen state…');
+      const screenId = await snapshotCurrentScreen('Main View');
+
+      // Step 2: Collect DOM inventory (with SPA hydration wait)
+      flash('Analyzing page elements…');
+      const dom = await waitForElements();
+      if (!dom.length) {
+        flash('No elements detected yet. Please ensure the app page is fully loaded or logged in.', 4000);
+        return;
+      }
+      flash(`Analyzing ${dom.length} page elements…`);
+
+      // Read configured AI settings
+      const provider = localStorage.getItem('demostudio_ai_provider') || 'gemini';
+      const apiKey = localStorage.getItem('demostudio_ai_key') || undefined;
+      const llmEndpoint = localStorage.getItem('demostudio_ai_endpoint') || undefined;
+      const llmModel = localStorage.getItem('demostudio_ai_model') || undefined;
+      const metaDescription = document.querySelector('meta[name="description"]')?.content || '';
+
+      // Step 3: Request AI Journey & Story Generation
+      const res = await fetch('/__tour/studio/ai-generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          dom,
+          url: location.href,
+          appName: document.title || 'My Application',
+          provider,
+          apiKey,
+          llmEndpoint,
+          llmModel,
+          metaDescription
+        })
+      });
+
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || 'AI generation failed');
+      if (!data.config || !data.config.chapters?.length) throw new Error('AI returned empty demo');
+
+      // Associate steps with captured screenId
+      data.config.chapters.forEach(ch => {
+        ch.steps.forEach(st => {
+          if (!st.screenId) st.screenId = screenId;
+        });
+      });
+
+      cfg = data.config;
+      dirty = true;
+      try { localStorage.setItem(LS_KEY, JSON.stringify(cfg)); } catch (e) {}
+
+      renderChapters();
+      activeStepIdx = 0;
+      renderEditor();
+
+      // Auto-save to server
+      await save();
+
+      const totalSteps = cfg.chapters.reduce((a, c) => a + (c.steps || []).length, 0);
+      flash(`Demo generated (${cfg.chapters.length} chapters, ${totalSteps} steps)`);
+
+      // Immediately launch live preview
+      setTimeout(preview, 600);
+    } catch (e) {
+      flash('Error: ' + e.message, 3500);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = orig;
+    }
+  }
+
+  // ── 1-Click Standalone Demo Export ───────────────────────────
+  async function exportStandalone() {
+    flash('Packaging standalone bundle…');
+    // Ensure at least one screen snapshot exists
+    await snapshotCurrentScreen('Primary View');
+
+    try {
+      const res = await fetch('/__tour/studio/export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ config: cfg })
+      });
+      const data = await res.json();
+      if (data.ok) {
+        alert(
+          'Standalone demo successfully exported.\n\n' +
+          'Directory: ' + data.exportDir + '\n' +
+          'Entry File: ' + data.indexPath + '\n\n' +
+          'You can now open index.html directly in any browser, embed it in an iframe, or host it statically with zero backend dependencies.'
+        );
+        flash('Exported to built-demo/');
+      } else {
+        flash('Export failed: ' + data.error);
+      }
+    } catch (e) {
+      flash('Export failed: ' + e.message);
+    }
+  }
+
+  // ── Render Steps & Chapters ──────────────────────────────────
   function renderChapters() {
     chaptersEl.innerHTML = '';
     cfg.chapters.forEach((ch, ci) => {
@@ -228,20 +1337,25 @@
       sec.className = 'studio-chapter';
       const title = document.createElement('div');
       title.className = 'studio-chapter-title';
-      title.innerHTML = `<span>${esc(ch.title) || ('Chapter ' + (ci + 1))}</span>
+      title.innerHTML = `
+        <span>${esc(ch.title) || ('Chapter ' + (ci + 1))}</span>
         <span class="studio-chapter-count">${ch.steps.length}</span>
-        <button class="studio-mini studio-ch-del" data-ci="${ci}" title="Delete chapter">🗑</button>`;
+        <button class="studio-mini studio-ch-del" data-ci="${ci}" title="Delete chapter">✕</button>
+      `;
       sec.appendChild(title);
+
       ch.steps.forEach((s, si) => {
         const row = document.createElement('div');
-        row.className = 'studio-step' + (activeStepIdx === si && ci === cfg.chapters.length - 1 ? ' on' : '');
-        row.innerHTML = `<span class="studio-step-num">${ci + 1}.${si + 1}</span>
+        const isActive = activeStepIdx === si;
+        row.className = 'studio-step' + (isActive ? ' on' : '');
+        row.innerHTML = `
+          <span class="studio-step-num">${ci + 1}.${si + 1}</span>
           <span class="studio-step-title">${esc(s.title)}</span>
           <span class="studio-step-sel">${esc(s.sel || '')}</span>
-          <button class="studio-mini studio-step-del" data-ci="${ci}" data-si="${si}" title="Delete step">✕</button>`;
+          <button class="studio-mini studio-step-del" data-ci="${ci}" data-si="${si}" title="Delete step">✕</button>
+        `;
         row.addEventListener('click', () => {
           activeStepIdx = si;
-          // move active chapter to last for simplicity? keep in place — select directly
           renderChapters();
           renderEditor();
         });
@@ -252,72 +1366,133 @@
   }
 
   function renderEditor() {
-    if (activeStepIdx < 0) {
-      editorEl.innerHTML = '<div class="studio-empty">Select a step to edit, or 🎯 Pick an element to create one.</div>';
+    if (activeStepIdx < 0 || !cfg.chapters.length) {
+      editorEl.innerHTML = '<div class="studio-empty">Select a step to edit, or click <b>Auto Demo</b> to generate a walkthrough.</div>';
       return;
     }
-    const ch = cfg.chapters[cfg.chapters.length - 1];
-    const s = ch.steps[activeStepIdx];
+    const ch = cfg.chapters[0];
+    const s = ch.steps[activeStepIdx] || ch.steps[0];
+    if (!s) {
+      editorEl.innerHTML = '<div class="studio-empty">Select a step to edit.</div>';
+      return;
+    }
+
     editorEl.innerHTML = `
-      <div class="studio-field"><label>Title</label><input id="ed-title" value="${escAttr(s.title)}"></div>
-      <div class="studio-field"><label>Body</label><textarea id="ed-body" rows="3">${esc(s.body)}</textarea></div>
-      <div class="studio-field"><label>Selector</label><input id="ed-sel" value="${escAttr(s.sel)}"></div>
+      <div class="studio-field">
+        <label>
+          <span class="material-symbols-outlined" style="font-size:14px;">title</span>
+          <span>Step Title</span>
+        </label>
+        <input id="ed-title" value="${escAttr(s.title)}" placeholder="e.g. Explore Main Dashboard">
+      </div>
+      <div class="studio-field">
+        <label>
+          <span class="material-symbols-outlined" style="font-size:14px;">description</span>
+          <span>Description Body</span>
+        </label>
+        <textarea id="ed-body" rows="3" placeholder="Explain the value or action to the prospect...">${esc(s.body)}</textarea>
+      </div>
+      <div class="studio-field">
+        <label>
+          <span class="material-symbols-outlined" style="font-size:14px;">code</span>
+          <span>Target Selector</span>
+        </label>
+        <input id="ed-sel" value="${escAttr(s.sel)}" placeholder="e.g. #dashboard or button.btn-primary">
+      </div>
       <div class="studio-field-row">
-        <div class="studio-field"><label>Position</label>
+        <div class="studio-field">
+          <label>
+            <span class="material-symbols-outlined" style="font-size:14px;">my_location</span>
+            <span>Position</span>
+          </label>
           <select id="ed-pos">
-            ${['center','top','bottom','left','right'].map(p => `<option ${s.pos === p ? 'selected' : ''}>${p}</option>`).join('')}
+            ${['bottom','top','left','right','center'].map(p => `<option ${s.pos === p ? 'selected' : ''}>${p}</option>`).join('')}
           </select>
         </div>
-        <div class="studio-field"><label>Advance</label>
+        <div class="studio-field">
+          <label>
+            <span class="material-symbols-outlined" style="font-size:14px;">touch_app</span>
+            <span>User Action</span>
+          </label>
           <select id="ed-action">
-            <option value="true" ${s.action ? 'selected' : ''}>Click element</option>
-            <option value="false" ${!s.action ? 'selected' : ''}>Next button</option>
+            <option value="true" ${s.action ? 'selected' : ''}>Click element (Action required - no Next button)</option>
+            <option value="false" ${!s.action ? 'selected' : ''}>Next button only</option>
+          </select>
+        </div>
+      </div>
+      <div class="studio-field-row">
+        <div class="studio-field">
+          <label>
+            <span class="material-symbols-outlined" style="font-size:14px;">filter_none</span>
+            <span>Screen Anchor</span>
+          </label>
+          <select id="ed-screen">
+            <option value="">Default (Current View)</option>
+            ${capturedScreensList.map(sc => `<option value="${escAttr(sc.id)}" ${s.screenId === sc.id ? 'selected' : ''}>${esc(sc.name)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="studio-field">
+          <label>
+            <span class="material-symbols-outlined" style="font-size:14px;">alt_route</span>
+            <span>Screen Transition</span>
+          </label>
+          <select id="ed-target-screen">
+            <option value="">Stay on Screen</option>
+            ${capturedScreensList.map(sc => `<option value="${escAttr(sc.id)}" ${s.targetScreen === sc.id ? 'selected' : ''}>Transition to: ${esc(sc.name)}</option>`).join('')}
           </select>
         </div>
       </div>
       <div class="studio-actions">
-        <button id="ed-apply" class="studio-btn studio-primary">Apply</button>
-        <button id="ed-test" class="studio-btn">Test select</button>
+        <button id="ed-apply" class="studio-btn studio-primary">
+          <span class="material-symbols-outlined" style="font-size:16px;">check</span>
+          <span>Apply Changes</span>
+        </button>
+        <button id="ed-test" class="studio-btn">
+          <span class="material-symbols-outlined" style="font-size:16px;">search</span>
+          <span>Test Element</span>
+        </button>
       </div>
-      <div id="ed-status" class="studio-ed-status"></div>
     `;
+
     document.querySelector('#ed-apply').addEventListener('click', () => {
       s.title = document.querySelector('#ed-title').value;
       s.body = document.querySelector('#ed-body').value;
       s.sel = document.querySelector('#ed-sel').value;
       s.pos = document.querySelector('#ed-pos').value;
       s.action = document.querySelector('#ed-action').value === 'true';
+      const screenVal = document.querySelector('#ed-screen').value;
+      const targetVal = document.querySelector('#ed-target-screen').value;
+      s.screenId = screenVal || undefined;
+      s.targetScreen = targetVal || undefined;
+      if (s.targetScreen) s.action = true; // Screen transition requires click
       dirty = true;
       renderChapters();
       flash('Step updated');
     });
+
     document.querySelector('#ed-test').addEventListener('click', () => {
       const sel = document.querySelector('#ed-sel').value;
-      const el = window.DemoStudio && DemoStudio.find(sel);
+      const el = window.DemoStudio && DemoStudio.find ? DemoStudio.find(sel) : document.querySelector(sel);
       if (el) {
-        flash('✅ Selector matches: ' + el.tagName.toLowerCase());
-        // flash the element
+        flash('Matched: ' + el.tagName.toLowerCase());
         const r = el.getBoundingClientRect();
         const hb = document.createElement('div');
         hb.id = 'studio-hover';
-        hb.style.cssText = `left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px;`;
+        hb.style.cssText = `position:fixed;left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px;border:1.5px solid #2563eb;z-index:999999;`;
         document.body.appendChild(hb);
         setTimeout(() => hb.remove(), 1500);
       } else {
-        flash('❌ Selector not found on this page');
+        flash('Selector not found on page');
       }
     });
   }
 
-  // ── Preview / Save / Export ──────────────────────────────────
+  // ── Preview, Save, Connect ───────────────────────────────────
   function preview() {
-    // Reload engine with current config
-    if (window.DemoStudio) window.DemoStudio.reload(JSON.parse(JSON.stringify(cfg)));
-    // engine's launch modal may show; force start after slight delay
-    setTimeout(() => {
-      if (window.DemoStudio) window.DemoStudio.start();
-    }, 400);
-    previewOn = true;
+    if (window.DemoStudio) {
+      window.DemoStudio.reload(JSON.parse(JSON.stringify(cfg)));
+      setTimeout(() => window.DemoStudio.start(), 300);
+    }
   }
 
   async function save() {
@@ -325,389 +1500,23 @@
       const res = await fetch('/__tour/studio/save', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(cfg),
+        body: JSON.stringify(cfg)
       });
       if (res.ok) {
         dirty = false;
-        flash('💾 Saved to server');
+        flash('Configuration saved');
       } else {
-        flash('Save failed: ' + (await res.text()));
+        flash('Save error');
       }
     } catch (e) {
-      flash('Save failed (server not reachable): ' + e.message);
+      flash('Save failed: ' + e.message);
     }
   }
 
-  function exportCfg() {
-    const blob = new Blob(['window.__TOUR_CONFIG = ' + JSON.stringify(cfg, null, 2) + ';'], { type: 'application/javascript' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'demo-config.js';
-    a.click();
-    URL.revokeObjectURL(a.href);
-    flash('⤓ Exported demo-config.js');
-  }
-
-  function exportHtml() {
-    const c = cfg;
-    const totalSteps = (c.chapters || []).reduce((a, ch) => a + (ch.steps || []).length, 0);
-    const escH = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-    const accent = c.accent || '#3b82f6';
-
-    const chaptersHtml = (c.chapters || []).map((ch, ci) => `
-      <section class="chapter">
-        <header class="ch-head" onclick="toggleCh(this)">
-          <span class="ch-num">${ci + 1}</span>
-          <h2>${escH(ch.title || ('Chapter ' + (ci + 1)))}</h2>
-          <span class="ch-count">${(ch.steps || []).length} step${(ch.steps || []).length === 1 ? '' : 's'}</span>
-          <span class="ch-chev">▾</span>
-        </header>
-        <div class="ch-body">
-          ${(ch.steps || []).map((s, si) => `
-            <div class="step">
-              <div class="step-head">
-                <span class="step-num">${ci + 1}.${si + 1}</span>
-                <strong>${escH(s.title || '(untitled step)')}</strong>
-                <span class="step-pos">${escH(s.pos || 'bottom')}</span>
-              </div>
-              <p class="step-body">${escH(s.body || '')}</p>
-              <code class="step-sel" title="CSS selector">${escH(s.sel || '')}</code>
-              ${s.action ? '<span class="step-action">click</span>' : ''}
-            </div>
-          `).join('')}
-        </div>
-      </section>
-    `).join('');
-
-    const html = `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${escH(c.appName || 'Tour')} — Tour</title>
-<style>
-  :root { --accent: ${accent}; }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: Inter, system-ui, -apple-system, sans-serif; background: #050505; color: #e6edf3; min-height: 100vh; padding: 48px 24px 80px; }
-  .wrap { max-width: 860px; margin: 0 auto; }
-  .hero { text-align: center; padding: 40px 0 48px; }
-  .hero h1 { font-size: 40px; font-weight: 800; letter-spacing: -.02em; }
-  .hero .sub { color: #8b949e; margin-top: 10px; font-size: 15px; }
-  .hero .meta { display: inline-flex; gap: 12px; margin-top: 18px; }
-  .pill { background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.1); border-radius: 999px; padding: 6px 16px; font-size: 13px; color: #8b949e; }
-  .pill b { color: #e6edf3; }
-  .chapter { border: 1px solid #222; border-radius: 16px; overflow: hidden; margin-bottom: 18px; background: #0b0b0b; }
-  .ch-head { display: flex; align-items: center; gap: 14px; padding: 18px 22px; cursor: pointer; user-select: none; }
-  .ch-head:hover { background: rgba(255,255,255,.02); }
-  .ch-num { width: 34px; height: 34px; border-radius: 10px; background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 15px; flex-shrink: 0; }
-  .ch-head h2 { flex: 1; font-size: 19px; font-weight: 700; }
-  .ch-count { color: #8b949e; font-size: 13px; }
-  .ch-chev { color: #8b949e; transition: transform .2s; }
-  .chapter.open .ch-chev { transform: rotate(180deg); }
-  .ch-body { padding: 0 22px 22px; }
-  .step { border: 1px solid #1c1c1c; border-radius: 12px; padding: 16px 18px; margin-top: 12px; background: #101010; }
-  .step-head { display: flex; align-items: center; gap: 10px; }
-  .step-num { font-size: 12px; font-weight: 800; color: var(--accent); font-family: ui-monospace, monospace; }
-  .step-pos { margin-left: auto; font-size: 11px; color: #8b949e; text-transform: uppercase; letter-spacing: .06em; border: 1px solid #222; padding: 2px 8px; border-radius: 6px; }
-  .step-action { font-size: 10px; color: #2ea043; border: 1px solid #2ea04333; background: #2ea04314; padding: 2px 8px; border-radius: 6px; }
-  .step-body { color: #b0b8c1; font-size: 14px; line-height: 1.6; margin: 10px 0 8px; }
-  .step-sel { display: block; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: #79b8ff; background: #0d1117; border: 1px solid #1c222c; border-radius: 8px; padding: 8px 10px; overflow-x: auto; white-space: pre-wrap; word-break: break-all; }
-  .hint { text-align: center; color: #484f58; font-size: 13px; margin-top: 28px; }
-  @media (max-width: 640px) { .hero h1 { font-size: 30px; } .ch-head { flex-wrap: wrap; } }
-</style>
-</head>
-<body>
-<div class="wrap">
-  <header class="hero">
-    <h1>${escH(c.appName || 'Tour')}</h1>
-    <p class="sub">${escH(c.launchTitle || '')}${c.launchBody ? ' — ' + escH(c.launchBody) : ''}</p>
-    <div class="meta">
-      <span class="pill"><b>${(c.chapters || []).length}</b> chapters</span>
-      <span class="pill"><b>${totalSteps}</b> steps</span>
-      <span class="pill">🎯 click-to-build</span>
-    </div>
-  </header>
-  ${chaptersHtml}
-  <p class="hint">Generated by DemoStudio — open this file in any browser to share the demo.</p>
-</div>
-<script>
-function toggleCh(el){ el.closest('.chapter').classList.toggle('open'); }
-document.querySelectorAll('.chapter').forEach(c => c.classList.add('open'));
-</script>
-</body>
-</html>`;
-
-    const blob = new Blob([html], { type: 'text/html' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = (c.appName || 'tour').replace(/[^a-z0-9]+/gi, '-').toLowerCase() + '-tour.html';
-    a.click();
-    URL.revokeObjectURL(a.href);
-    flash('⤓ Exported HTML tour');
-  }
-
-  function exportPlayer() {
-    const c = cfg;
-    const totalSteps = (c.chapters || []).reduce((a, ch) => a + (ch.steps || []).length, 0);
-    const escH = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-    const accent = c.accent || '#3b82f6';
-
-    // Build mock UI elements from step selectors so the highlight has something to attach to
-    // Each step's sel becomes a mock chip with matching id/class
-    const mockSections = (c.chapters || []).map((ch, ci) => {
-      const steps = ch.steps || [];
-      return `
-      <div class="mock-chapter" id="mock-ch-${ci + 1}">
-        <div class="mock-ch-title">${escH(ch.title || ('Chapter ' + (ci + 1)))}</div>
-        <div class="mock-ch-steps">
-          ${steps.map((s, si) => `
-            <div class="mock-step" data-chapter="${ci}" data-step="${si}">
-              <span class="mock-step-num">${ci + 1}.${si + 1}</span>
-              <span class="mock-step-text">${escH(s.title || 'Step')}</span>
-              ${s.sel ? `<code class="mock-step-sel">${escH(s.sel)}</code>` : ''}
-            </div>
-          `).join('')}
-        </div>
-      </div>`;
-    }).join('');
-
-    const html = `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${escH(c.appName || 'Tour')} — Interactive Tour</title>
-<style>
-  :root { --accent: ${accent}; }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: Inter, system-ui, -apple-system, sans-serif; background: #050505; color: #e6edf3; min-height: 100vh; }
-  .topbar { position: sticky; top: 0; z-index: 10; display: flex; align-items: center; gap: 20px; padding: 14px 28px; background: rgba(5,5,5,.9); backdrop-filter: blur(8px); border-bottom: 1px solid #1c1c1c; }
-  .topbar .logo { font-weight: 800; font-size: 16px; display: flex; align-items: center; gap: 10px; }
-  .topbar .logo .dot { width: 10px; height: 10px; border-radius: 3px; background: var(--accent); }
-  .topbar .nav { display: flex; gap: 18px; flex: 1; margin-left: 24px; }
-  .topbar .nav a { color: #8b949e; font-size: 14px; text-decoration: none; cursor: pointer; }
-  .topbar .nav a:hover { color: #e6edf3; }
-  .topbar .user { display: flex; align-items: center; gap: 8px; color: #8b949e; font-size: 13px; }
-  .topbar .avatar { width: 30px; height: 30px; border-radius: 50%; background: var(--accent); display: flex; align-items: center; justify-content: center; color: #fff; font-size: 13px; font-weight: 700; }
-  .layout { display: grid; grid-template-columns: 240px 1fr; min-height: calc(100vh - 60px); }
-  .sidebar { border-right: 1px solid #1c1c1c; padding: 24px 14px; }
-  .sidebar .item { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 10px; color: #8b949e; font-size: 14px; cursor: pointer; }
-  .sidebar .item:hover, .sidebar .item.active { background: rgba(255,255,255,.06); color: #e6edf3; }
-  .sidebar .item.active { color: var(--accent); }
-  .main { padding: 32px; }
-  .main h2 { font-size: 24px; margin-bottom: 18px; }
-  .card { border: 1px solid #1c1c1c; border-radius: 14px; background: #0b0b0b; padding: 22px; margin-bottom: 16px; max-width: 640px; }
-  .card h3 { font-size: 16px; margin-bottom: 8px; }
-  .card p { color: #8b949e; font-size: 13px; line-height: 1.6; }
-  .btn { display: inline-flex; align-items: center; gap: 8px; background: var(--accent); color: #fff; border: none; border-radius: 10px; padding: 10px 18px; font-size: 14px; font-weight: 700; cursor: pointer; }
-  .btn.ghost { background: transparent; border: 1px solid #30363d; color: #e6edf3; }
-  .mock-chapter { border: 1px solid #222; border-radius: 14px; overflow: hidden; margin-bottom: 18px; background: #0b0b0b; }
-  .mock-ch-title { padding: 14px 18px; font-weight: 700; font-size: 15px; border-bottom: 1px solid #1c1c1c; }
-  .mock-ch-steps { padding: 8px; }
-  .mock-step { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 10px; cursor: pointer; }
-  .mock-step:hover { background: rgba(255,255,255,.04); }
-  .mock-step-num { font-size: 12px; font-weight: 800; color: var(--accent); font-family: ui-monospace, monospace; }
-  .mock-step-text { flex: 1; font-size: 14px; }
-  .mock-step-sel { font-family: ui-monospace, monospace; font-size: 11px; color: #79b8ff; background: #0d1117; border: 1px solid #1c222c; border-radius: 6px; padding: 3px 8px; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .progress { position: fixed; bottom: 24px; right: 24px; display: flex; align-items: center; gap: 8px; background: rgba(5,5,5,.85); border: 1px solid #222; border-radius: 999px; padding: 8px 14px; font-size: 12px; color: #8b949e; z-index: 20; }
-</style>
-</head>
-<body>
-<div class="topbar">
-  <div class="logo"><span class="dot"></span> ${escH(c.appName || 'Tour')}</div>
-  <div class="nav">
-    ${(c.chapters || []).map((ch, i) => `<a data-nav="${i}">${escH(ch.title || ('Ch ' + (i + 1)))}</a>`).join('')}
-  </div>
-  <div class="user"><span>Demo user</span><span class="avatar">A</span></div>
-</div>
-<div class="layout">
-  <aside class="sidebar">
-    ${(c.chapters || []).map((ch, i) => `<div class="item" data-nav="${i}">${escH(ch.title || ('Chapter ' + (i + 1)))}</div>`).join('')}
-    <div class="item">Settings</div>
-    <div class="item">Log out</div>
-  </aside>
-  <main class="main">
-    <h2 id="page-title">${escH((c.chapters[0] && c.chapters[0].title) || 'Overview')}</h2>
-    ${mockSections}
-    <div style="margin-top:24px">
-      <button class="btn" id="start-demo">▶ Start the demo</button>
-      <button class="btn ghost" id="restart-demo">↺ Restart</button>
-    </div>
-  </main>
-</div>
-<div class="progress" id="progress">0 / ${totalSteps}</div>
-
-<script>
-// ── DemoStudio engine (embedded, self-contained) ───────────────
-window.__TOUR_CONFIG = ${JSON.stringify(c, null, 2)};
-(function(){
-  if (window.__demoStudioLoaded) return;
-  window.__demoStudioLoaded = true;
-  var CONFIG = window.__TOUR_CONFIG || {};
-  var overlay = null, stepIdx = -1, chapterIdx = 0, active = null, marker = null, progressEl = null, started = false, cur = null;
-
-  function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-
-  function buildOverlay(){
-    if (overlay) return;
-    overlay = document.createElement('div');
-    overlay.id = 'demostudio-overlay';
-    overlay.style.cssText = 'position:fixed;inset:0;z-index:99999;pointer-events:none;';
-    overlay.innerHTML = '<div id="tour-card"></div><div id="tour-marker"></div>';
-    document.body.appendChild(overlay);
-    marker = overlay.querySelector('#tour-marker');
-    progressEl = document.getElementById('progress');
-  }
-
-  function stepPos(el, pos){
-    var r = el.getBoundingClientRect();
-    var cw = window.innerWidth, chh = window.innerHeight;
-    if (pos === 'top') return { x: r.left + r.width/2, y: r.top - 12, anchor: 'bottom' };
-    if (pos === 'bottom') return { x: r.left + r.width/2, y: r.bottom + 12, anchor: 'top' };
-    if (pos === 'left') return { x: r.left - 12, y: r.top + r.height/2, anchor: 'right' };
-    if (pos === 'right') return { x: r.right + 12, y: r.top + r.height/2, anchor: 'left' };
-    return { x: r.left + r.width/2, y: r.bottom + 12, anchor: 'top' };
-  }
-
-  function ensureVisible(el){
-    var r = el.getBoundingClientRect();
-    if (r.top < 80) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
-  }
-
-  function findStepTarget(step, ci, si){
-    // 1) if a mock-step element exists for this step, use it
-    var mock = document.querySelector('[data-chapter="' + ci + '"][data-step="' + si + '"]');
-    if (mock) return mock;
-    // 2) try the raw selector
-    try {
-      var els = document.querySelectorAll(step.sel);
-      if (els.length) return els[0];
-    } catch(e){}
-    // 3) fallback: chapter section
-    return document.getElementById('mock-ch-' + (ci + 1)) || document.querySelector('.main');
-  }
-
-  function showStep(){
-    if (!started || !CONFIG.chapters || !CONFIG.chapters.length) return;
-    if (chapterIdx >= CONFIG.chapters.length) { endTour(); return; }
-    var ch = CONFIG.chapters[chapterIdx];
-    if (!ch.steps || !ch.steps.length) { chapterIdx++; showStep(); return; }
-    if (stepIdx >= ch.steps.length) { chapterIdx++; stepIdx = 0; showStep(); return; }
-    var step = ch.steps[stepIdx];
-    var el = findStepTarget(step, chapterIdx, stepIdx);
-    if (!el) { stepIdx++; showStep(); return; }
-    ensureVisible(el);
-
-    buildOverlay();
-    var pos = stepPos(el, step.pos || 'bottom');
-    var card = overlay.querySelector('#tour-card');
-    card.style.cssText = 'position:absolute;left:0;top:0;transform:translate(' + (pos.x - Math.min(pos.x, 340)) + 'px,' + pos.y + 'px);width:320px;background:#0d1117;border:1px solid #30363d;border-radius:14px;color:#e6edf3;font-family:Inter,system-ui,sans-serif;font-size:13px;box-shadow:0 24px 70px rgba(0,0,0,.6);pointer-events:auto;' + (pos.anchor === 'top' ? 'margin-top:12px' : 'margin-top:12px');
-    // keep on-screen horizontally
-    var cx = pos.x;
-    if (cx > window.innerWidth - 340) cx = window.innerWidth - 340 - 12;
-    if (cx < 12) cx = 12;
-    card.style.left = '0'; card.style.transform = 'translate(' + cx + 'px,' + pos.y + 'px)';
-
-    card.innerHTML =
-      '<div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid #21262d">' +
-        '<span style="font-weight:800">' + esc(ch.title || '') + '</span>' +
-        '<span style="font-size:11px;color:#8b949e">' + (chapterIdx + 1) + '.' + (stepIdx + 1) + '</span>' +
-      '</div>' +
-      '<div style="padding:14px 16px">' +
-        '<div style="font-weight:700;font-size:14px;margin-bottom:6px">' + esc(step.title || '') + '</div>' +
-        '<div style="color:#b0b8c1;line-height:1.55">' + esc(step.body || '') + '</div>' +
-      '</div>' +
-      '<div style="display:flex;gap:8px;padding:12px 16px;border-top:1px solid #21262d;align-items:center">' +
-        (stepIdx > 0 || chapterIdx > 0 ? '<button data-t="prev" style="background:transparent;border:1px solid #30363d;color:#e6edf3;border-radius:8px;padding:7px 12px;font-size:12px;font-weight:600;cursor:pointer">← Prev</button>' : '') +
-        '<span style="flex:1"></span>' +
-        (stepIdx < ch.steps.length - 1 || chapterIdx < CONFIG.chapters.length - 1
-          ? '<button data-t="next" style="background:' + CONFIG.accent + ';border:none;color:#fff;border-radius:8px;padding:7px 14px;font-size:12px;font-weight:700;cursor:pointer">Next →</button>'
-          : '<button data-t="done" style="background:' + CONFIG.accent + ';border:none;color:#fff;border-radius:8px;padding:7px 14px;font-size:12px;font-weight:700;cursor:pointer">Finish ✓</button>') +
-      '</div>';
-    card.querySelectorAll('[data-t]').forEach(function(b){
-      b.addEventListener('click', function(){
-        var t = b.getAttribute('data-t');
-        if (t === 'next') { stepIdx++; showStep(); }
-        else if (t === 'prev') { if (stepIdx > 0) stepIdx--; else { chapterIdx--; stepIdx = CONFIG.chapters[chapterIdx].steps.length - 1; } showStep(); }
-        else if (t === 'done') endTour();
-      });
-    });
-
-    // marker
-    var mr = el.getBoundingClientRect();
-    marker.style.cssText = 'position:fixed;left:' + mr.left + 'px;top:' + mr.top + 'px;width:' + mr.width + 'px;height:' + mr.height + 'px;border:3px solid ' + CONFIG.accent + ';border-radius:10px;box-shadow:0 0 0 9999px rgba(0,0,0,.55), 0 0 24px rgba(0,0,0,.6);z-index:99990;pointer-events:none;transition:all .25s;';
-    var total = CONFIG.chapters.reduce(function(a,cc){ return a + (cc.steps||[]).length; }, 0);
-    var seen = 0;
-    for (var i = 0; i < chapterIdx; i++) seen += (CONFIG.chapters[i].steps||[]).length;
-    seen += stepIdx + 1;
-    if (progressEl) progressEl.textContent = seen + ' / ' + total;
-  }
-
-  function startTour(){
-    started = true; chapterIdx = 0; stepIdx = 0;
-    buildOverlay();
-    showStep();
-  }
-  function endTour(){
-    started = false;
-    if (overlay) overlay.remove(); overlay = null; marker = null;
-    if (progressEl) progressEl.textContent = 'Done ✓';
-  }
-  function restartTour(){ endTour(); setTimeout(startTour, 100); }
-
-  window.DemoStudio = {
-    start: startTour, end: endTour, restart: restartTour,
-    getConfig: function(){ return CONFIG; }
-  };
-
-  // Nav buttons scroll to chapter
-  document.querySelectorAll('[data-nav]').forEach(function(a){
-    a.addEventListener('click', function(){
-      var i = +a.getAttribute('data-nav');
-      var el = document.getElementById('mock-ch-' + (i + 1));
-      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    });
-  });
-
-  document.getElementById('start-demo').addEventListener('click', startTour);
-  document.getElementById('restart-demo').addEventListener('click', restartTour);
-})();
-</script>
-</body>
-</html>`;
-
-    const blob = new Blob([html], { type: 'text/html' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = (c.appName || 'tour').replace(/[^a-z0-9]+/gi, '-').toLowerCase() + '-player.html';
-    a.click();
-    URL.revokeObjectURL(a.href);
-    flash('⤓ Exported interactive player');
-  }
-
-  // ── Helpers ──────────────────────────────────────────────────
-  function esc(s) { return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
-  function escAttr(s) { return esc(s).replace(/"/g, '&quot;'); }
-  function flash(msg, ms = 1800) {
-    document.querySelector('#studio-save-state').textContent = msg;
-    clearTimeout(flash._t);
-    flash._t = setTimeout(() => { document.querySelector('#studio-save-state').textContent = dirty ? '● unsaved' : ''; }, ms);
-  }
-
-  // ── Wire up ──────────────────────────────────────────────────
-  document.querySelector('#studio-pick').addEventListener('click', () => setPick(!pickMode));
-  document.querySelector('#studio-preview').addEventListener('click', preview);
-  document.querySelector('#studio-save').addEventListener('click', save);
-  document.querySelector('#studio-export').addEventListener('click', exportCfg);
-  document.querySelector('#studio-export-html').addEventListener('click', exportHtml);
-  document.querySelector('#studio-export-player').addEventListener('click', exportPlayer);
-
-  // ── Target URL connect ──────────────────────────────────────
   async function connectTarget() {
     const input = document.querySelector('#studio-url');
     const url = (input.value || '').trim();
-    if (!url) { flash('Enter an app URL first'); return; }
-    if (!/^https?:\/\//i.test(url)) { flash('URL must start with http:// or https://'); return; }
+    if (!url) { flash('Please enter a valid URL'); return; }
     flash('Connecting to ' + url + '…');
     try {
       const res = await fetch('/__tour/studio/target', {
@@ -717,45 +1526,353 @@ window.__TOUR_CONFIG = ${JSON.stringify(c, null, 2)};
       });
       const data = await res.json();
       if (data.ok) {
-        // Switching target = new app = fresh config. Drop stale draft.
         try { localStorage.removeItem(LS_KEY); } catch (e) {}
-        flash('✓ Connected to ' + data.target);
-        // Reload the page so the proxy now points at the new target app
-        setTimeout(() => location.reload(), 800);
+        flash('Connected: ' + data.target);
+        setTimeout(() => location.reload(), 600);
       } else {
-        flash('✗ ' + (data.error || 'Failed to connect'));
+        flash(data.error || 'Connection failed');
       }
     } catch (e) {
-      flash('✗ Connect failed: ' + e.message);
+      flash('Connection error: ' + e.message);
     }
   }
 
-  async function loadCurrentTarget() {
-    try {
-      const res = await fetch('/__tour/studio/current');
-      const data = await res.json();
-      const input = document.querySelector('#studio-url');
-      if (data.target && input) input.placeholder = 'Current: ' + data.target.replace(/\/$/, '');
-      if (data.target && input && !input.value) input.value = '';
-    } catch (e) { /* ignore */ }
+  function esc(s) { return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+  function escAttr(s) { return esc(s).replace(/"/g, '&quot;'); }
+  function flash(msg, ms = 2200) {
+    const el = document.querySelector('#studio-save-state');
+    if (el) el.textContent = msg;
+    clearTimeout(flash._t);
+    flash._t = setTimeout(() => { if (el) el.textContent = dirty ? '● unsaved' : ''; }, ms);
   }
-  loadCurrentTarget();
+
+  // ── Screens Manager ──────────────────────────────────────────
+  async function fetchScreens() {
+    try {
+      const res = await fetch('/__tour/studio/screens');
+      const data = await res.json();
+      if (data.ok && Array.isArray(data.screens)) {
+        capturedScreensList = data.screens;
+        const countEl = document.querySelector('#studio-screens-count');
+        if (countEl) countEl.textContent = capturedScreensList.length;
+        renderScreens();
+      }
+    } catch (e) {
+      console.warn('Failed to fetch screens:', e);
+    }
+  }
+
+  function renderScreens() {
+    const listEl = document.querySelector('#studio-screens-list');
+    if (!listEl) return;
+    if (!capturedScreensList.length) {
+      listEl.innerHTML = '<div class="studio-empty">No screens captured yet. Click <b>Capture Current</b> or run <b>Auto Demo</b>.</div>';
+      return;
+    }
+
+    listEl.innerHTML = capturedScreensList.map((sc, idx) => {
+      // Count steps anchored to this screen
+      let stepCount = 0;
+      (cfg.chapters || []).forEach(ch => {
+        (ch.steps || []).forEach(st => {
+          if (st.screenId === sc.id || (!st.screenId && idx === 0)) stepCount++;
+        });
+      });
+
+      return `
+        <div class="studio-screen-card" data-id="${escAttr(sc.id)}">
+          <div class="studio-screen-icon">
+            <span class="material-symbols-outlined" style="font-size:20px;">desktop_windows</span>
+          </div>
+          <div class="studio-screen-info">
+            <div class="studio-screen-name" title="${escAttr(sc.name)}">${esc(sc.name)}</div>
+            <div class="studio-screen-sub">
+              <span>${esc(sc.id)}</span>
+              <span>•</span>
+              <span>${stepCount} step${stepCount === 1 ? '' : 's'}</span>
+            </div>
+          </div>
+          <div class="studio-screen-actions">
+            <button class="studio-mini studio-screen-rename" data-id="${escAttr(sc.id)}" title="Rename screen">
+              <span class="material-symbols-outlined" style="font-size:16px;">edit</span>
+            </button>
+            <button class="studio-mini studio-screen-del" data-id="${escAttr(sc.id)}" title="Delete screen">
+              <span class="material-symbols-outlined" style="font-size:16px;">delete</span>
+            </button>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    // Wire rename and delete
+    listEl.querySelectorAll('.studio-screen-rename').forEach(btn => {
+      btn.onclick = async e => {
+        e.stopPropagation();
+        const id = btn.dataset.id;
+        const current = capturedScreensList.find(s => s.id === id);
+        const newName = prompt('Enter new screen name:', current?.name || '');
+        if (!newName || !newName.trim() || newName === current?.name) return;
+        try {
+          const res = await fetch('/__tour/studio/screens/rename', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ screenId: id, name: newName.trim() })
+          });
+          const data = await res.json();
+          if (data.ok) {
+            flash('Screen renamed');
+            await fetchScreens();
+            renderEditor();
+          }
+        } catch (err) {
+          flash('Rename failed');
+        }
+      };
+    });
+
+    listEl.querySelectorAll('.studio-screen-del').forEach(btn => {
+      btn.onclick = async e => {
+        e.stopPropagation();
+        const id = btn.dataset.id;
+        if (!confirm('Delete this captured screen snapshot?')) return;
+        try {
+          const res = await fetch('/__tour/studio/screens/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ screenId: id })
+          });
+          const data = await res.json();
+          if (data.ok) {
+            flash('Screen deleted');
+            await fetchScreens();
+            renderEditor();
+          }
+        } catch (err) {
+          flash('Delete failed');
+        }
+      };
+    });
+  }
+
+  // ── Tabs Navigation ──────────────────────────────────────────
+  function initTabs() {
+    const tabBtns = wrap.querySelectorAll('.studio-tab-btn');
+    const views = {
+      steps: wrap.querySelector('#studio-view-steps'),
+      screens: wrap.querySelector('#studio-view-screens'),
+      agent: wrap.querySelector('#studio-view-agent')
+    };
+
+    tabBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        tabBtns.forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        const tab = btn.dataset.tab;
+        Object.keys(views).forEach(k => {
+          if (views[k]) views[k].style.display = k === tab ? 'block' : 'none';
+        });
+        if (tab === 'screens') fetchScreens();
+      });
+    });
+  }
+
+  // ── Material Light/Dark Theme ────────────────────────────────
+  function initTheme() {
+    const saved = localStorage.getItem('demostudio_theme') || 'light';
+    const icon = document.querySelector('#studio-theme-icon');
+    if (saved === 'dark') {
+      wrap.classList.add('theme-dark');
+      if (icon) icon.textContent = 'light_mode';
+    } else {
+      wrap.classList.remove('theme-dark');
+      if (icon) icon.textContent = 'dark_mode';
+    }
+
+    const toggleBtn = document.querySelector('#studio-theme-toggle');
+    if (toggleBtn) {
+      toggleBtn.onclick = () => {
+        const isDark = wrap.classList.toggle('theme-dark');
+        localStorage.setItem('demostudio_theme', isDark ? 'dark' : 'light');
+        if (icon) icon.textContent = isDark ? 'light_mode' : 'dark_mode';
+        flash(`Theme set to ${isDark ? 'Dark' : 'Light'}`);
+      };
+    }
+  }
+
+  // ── Conversational AI Agent Chat ─────────────────────────────
+  function initAgentChat() {
+    const input = document.querySelector('#studio-agent-input');
+    const sendBtn = document.querySelector('#studio-agent-send');
+    const msgsEl = document.querySelector('#studio-chat-msgs');
+    if (!input || !sendBtn || !msgsEl) return;
+
+    async function sendChat(text) {
+      const msg = (text || input.value || '').trim();
+      if (!msg) return;
+      input.value = '';
+
+      // Append user bubble
+      const userDiv = document.createElement('div');
+      userDiv.className = 'studio-chat-msg studio-chat-user';
+      userDiv.innerHTML = `<div class="studio-chat-bubble">${esc(msg)}</div>`;
+      msgsEl.appendChild(userDiv);
+
+      // Append loading assistant bubble
+      const aiDiv = document.createElement('div');
+      aiDiv.className = 'studio-chat-msg studio-chat-ai';
+      aiDiv.innerHTML = `
+        <div class="studio-chat-avatar"><span class="material-symbols-outlined">psychology</span></div>
+        <div class="studio-chat-bubble">Thinking…</div>
+      `;
+      msgsEl.appendChild(aiDiv);
+      msgsEl.scrollTop = msgsEl.scrollHeight;
+
+      sendBtn.disabled = true;
+
+      try {
+        const dom = collectDomInventory();
+        const apiKey = localStorage.getItem('demostudio_ai_key') || undefined;
+        const llmModel = localStorage.getItem('demostudio_ai_model') || undefined;
+        const llmEndpoint = localStorage.getItem('demostudio_ai_endpoint') || undefined;
+
+        const res = await fetch('/__tour/studio/ai-chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message: msg,
+            config: cfg,
+            dom,
+            apiKey,
+            llmModel,
+            llmEndpoint
+          })
+        });
+
+        const data = await res.json();
+        const bubble = aiDiv.querySelector('.studio-chat-bubble');
+
+        if (data.ok) {
+          // Format text response
+          let cleanReply = data.reply || '';
+          cleanReply = cleanReply.replace(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/g, '').trim();
+          bubble.innerHTML = esc(cleanReply).replace(/\n/g, '<br>');
+
+          if (data.updatedConfig && data.updatedConfig.chapters?.length) {
+            const propCard = document.createElement('div');
+            propCard.className = 'studio-chat-proposal';
+            const chCount = data.updatedConfig.chapters.length;
+            const stCount = data.updatedConfig.chapters.reduce((a, c) => a + (c.steps || []).length, 0);
+
+            propCard.innerHTML = `
+              <div class="studio-chat-proposal-title">
+                <span class="material-symbols-outlined" style="font-size:16px;">auto_awesome</span>
+                <span>Proposed Walkthrough Changes (${chCount} ch, ${stCount} steps)</span>
+              </div>
+              <button class="studio-btn studio-primary" style="width:100%;margin-top:6px;padding:6px 12px;font-size:12px;">
+                <span class="material-symbols-outlined" style="font-size:14px;">check_circle</span>
+                <span>Apply to Live Tour</span>
+              </button>
+            `;
+
+            propCard.querySelector('button').onclick = async () => {
+              cfg = data.updatedConfig;
+              dirty = true;
+              try { localStorage.setItem(LS_KEY, JSON.stringify(cfg)); } catch (e) {}
+              renderChapters();
+              renderEditor();
+              await save();
+              flash('AI tour changes applied!');
+              propCard.querySelector('button').textContent = 'Applied';
+              propCard.querySelector('button').disabled = true;
+            };
+
+            bubble.appendChild(propCard);
+          }
+        } else {
+          bubble.textContent = 'AI error: ' + (data.error || 'Request failed');
+        }
+      } catch (err) {
+        aiDiv.querySelector('.studio-chat-bubble').textContent = 'Error: ' + err.message;
+      } finally {
+        sendBtn.disabled = false;
+        msgsEl.scrollTop = msgsEl.scrollHeight;
+      }
+    }
+
+    sendBtn.onclick = () => sendChat();
+    input.onkeydown = e => { if (e.key === 'Enter') sendChat(); };
+
+    // Prompt chips
+    wrap.querySelectorAll('.studio-chat-chip').forEach(chip => {
+      chip.onclick = () => sendChat(chip.dataset.prompt);
+    });
+  }
+
+  // ── Wire Buttons ─────────────────────────────────────────────
+  document.querySelector('#studio-ai-auto').addEventListener('click', async () => {
+    await aiAutoDemo();
+    await fetchScreens();
+  });
+  document.querySelector('#studio-ai-settings').addEventListener('click', showAiSettingsModal);
+  document.querySelector('#studio-auto-inspect').addEventListener('click', () => {
+    toggleAutoInspectSession();
+  });
+  document.querySelector('#studio-auto-capture').addEventListener('click', () => {
+    setAutoCapture(!autoCaptureMode);
+  });
+  document.querySelector('#studio-pick').addEventListener('click', () => {
+    setPick(!pickMode);
+  });
+  window.addEventListener('keydown', e => {
+    if (e.key === 'Escape') {
+      if (pickMode) {
+        setPick(false);
+        showStudioToast('Inspect cancelled', 'close');
+      } else if (isRecordingSession) {
+        stopSessionRecording();
+        showStudioToast('Demo recording canceled', 'close');
+      }
+    }
+  });
+  document.querySelector('#studio-snapshot').addEventListener('click', async () => {
+    await snapshotCurrentScreen();
+    await fetchScreens();
+  });
+  document.querySelector('#studio-add-screen').addEventListener('click', async () => {
+    await snapshotCurrentScreen();
+    await fetchScreens();
+  });
+  document.querySelector('#studio-edit-content').addEventListener('click', () => toggleContentEditing());
+  document.querySelector('#studio-preview').addEventListener('click', preview);
+  document.querySelector('#studio-save').addEventListener('click', save);
+  document.querySelector('#studio-export-standalone').addEventListener('click', exportStandalone);
   document.querySelector('#studio-connect').addEventListener('click', connectTarget);
-  document.querySelector('#studio-url').addEventListener('keydown', (e) => { if (e.key === 'Enter') connectTarget(); });
-  document.querySelector('#studio-min').addEventListener('click', () => {
-    panel.classList.toggle('studio-minimized');
+  document.querySelector('#studio-url').addEventListener('keydown', e => { if (e.key === 'Enter') connectTarget(); });
+
+  document.querySelector('#studio-min').addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleMinimize();
   });
   document.querySelector('#studio-close').addEventListener('click', () => {
     if (dirty && !confirm('Unsaved changes. Close studio anyway?')) return;
     wrap.remove();
-    if (window.DemoStudio) window.DemoStudio.end();
   });
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && pickMode) setPick(false);
+  document.querySelector('#studio-dashboard-btn').addEventListener('click', () => {
+    if (dirty && !confirm('You have unsaved changes. Return to Dashboard anyway?')) return;
+    location.href = '/__tour/dashboard';
+  });
+  document.querySelector('#studio-switch-target').addEventListener('click', async () => {
+    if (dirty && !confirm('You have unsaved changes. Switch website anyway?')) return;
+    try {
+      await fetch('/__tour/studio/disconnect');
+      location.href = '/__tour/welcome';
+    } catch (e) {
+      location.href = '/__tour/welcome';
+    }
   });
 
-  // Delete step / chapter
-  chaptersEl.addEventListener('click', (e) => {
+  // Step/Chapter Deletion
+  chaptersEl.addEventListener('click', e => {
     const delStep = e.target.closest('.studio-step-del');
     if (delStep) {
       e.stopPropagation();
@@ -777,23 +1894,25 @@ window.__TOUR_CONFIG = ${JSON.stringify(c, null, 2)};
     }
   });
 
-  // Button to add a new chapter
-  const addChBtn = document.createElement('button');
-  addChBtn.className = 'studio-btn studio-primary studio-add-chapter';
-  addChBtn.textContent = '+ New chapter';
-  addChBtn.addEventListener('click', () => {
-    cfg.chapters.push({ title: 'Chapter ' + (cfg.chapters.length + 1), steps: [] });
-    activeStepIdx = -1;
-    dirty = true;
-    renderChapters(); renderEditor();
-  });
-  chaptersEl.after(addChBtn);
+  // Load Current Target into input
+  fetch('/__tour/studio/current').then(r => r.json()).then(d => {
+    const inp = document.querySelector('#studio-url');
+    if (d.target && inp) inp.placeholder = 'Current: ' + d.target;
+  }).catch(() => {});
 
+  initTabs();
+  initTheme();
+  initAgentChat();
+  fetchScreens();
   renderChapters();
   renderEditor();
 
-  // Keep draft in localStorage as you work
-  setInterval(() => { if (dirty) { try { localStorage.setItem(LS_KEY, JSON.stringify(cfg)); } catch (e) {} } }, 1500);
-
-  window.__tourStudio = { getConfig: () => cfg, setPick, preview, save, exportCfg };
+  window.__tourStudio = {
+    getConfig: () => cfg,
+    setPick,
+    toggleContentEditing,
+    snapshotCurrentScreen,
+    aiAutoDemo,
+    exportStandalone
+  };
 })();

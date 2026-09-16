@@ -129,11 +129,6 @@
   `;
   document.body.appendChild(launch);
 
-  const progress = document.createElement('div');
-  progress.id = 'demostudio-progress';
-  progress.innerHTML = `<span id="demostudio-progress-label">1 / ${TOTAL}</span><span class="bar"><i id="demostudio-progress-fill"></i></span>`;
-  document.body.appendChild(progress);
-
   applyTheme();
 
   const $ = id => document.getElementById(id);
@@ -194,22 +189,29 @@
     $('demostudio-kicker').textContent = `CHAPTER ${ci + 1} · ${ch.title.toUpperCase()}`;
     $('demostudio-title').textContent = st.title;
     $('demostudio-body').textContent = st.body;
+    const nextBtn = $('demostudio-next');
     if (st.action) {
       hint.textContent = st.hint || CFG.clickHint;
       hint.style.display = 'block';
-      $('demostudio-next').style.display = 'none';
+      if (nextBtn) nextBtn.style.display = 'none';
     } else {
       hint.style.display = 'none';
-      $('demostudio-next').style.display = '';
+      if (nextBtn) {
+        nextBtn.style.display = '';
+        nextBtn.textContent = cur === TOTAL - 1 ? CFG.finishLabel : CFG.nextLabel;
+      }
+    }
+    const backBtn = $('demostudio-back');
+    if (backBtn) {
+      backBtn.style.display = cur === 0 ? 'none' : '';
+      backBtn.textContent = CFG.backLabel;
     }
     const dots = $('demostudio-dots'); dots.innerHTML = '';
     ch.steps.forEach((_, i) => {
       const d = document.createElement('span'); d.className = 'dot' + (i === si ? ' on' : ''); dots.appendChild(d);
     });
-    $('demostudio-next').textContent = cur === TOTAL - 1 ? CFG.finishLabel : CFG.nextLabel;
-    $('demostudio-back').style.visibility = cur === 0 ? 'hidden' : 'visible';
-    $('demostudio-progress-label').textContent = `${cur + 1} / ${TOTAL}`;
-    $('demostudio-progress-fill').style.width = ((cur + 1) / TOTAL * 100) + '%';
+    const pl = $('demostudio-progress-label'); if (pl) pl.textContent = `${cur + 1} / ${TOTAL}`;
+    const pf = $('demostudio-progress-fill'); if (pf) pf.style.width = ((cur + 1) / TOTAL * 100) + '%';
     position(); startPolling();
   }
 
@@ -239,12 +241,27 @@
       marker.style.width = box.width + 'px'; marker.style.height = box.height + 'px';
       marker.classList.add('on');
     } else marker.classList.remove('on');
-    const cw = card.offsetWidth || 330, chh = card.offsetHeight || 200;
+    const cw = card.offsetWidth || 360, chh = card.offsetHeight || 210;
     let gx, gy;
-    const pos = st.pos || 'center';
+    let pos = st.pos || 'bottom';
     if (!box) { gx = vw / 2 - cw / 2; gy = vh / 2 - chh / 2; }
     else {
-      const cx = box.cx, cy = box.cy;
+      // Dynamic collision avoidance & auto-flip
+      const spaceBelow = vh - (box.top + box.height);
+      const spaceAbove = box.top;
+      const spaceRight = vw - (box.left + box.width);
+      const spaceLeft = box.left;
+
+      if (pos === 'bottom' && spaceBelow < chh + 24 && spaceAbove >= chh + 24) {
+        pos = 'top';
+      } else if (pos === 'top' && spaceAbove < chh + 24 && spaceBelow >= chh + 24) {
+        pos = 'bottom';
+      } else if (pos === 'right' && spaceRight < cw + 24 && spaceLeft >= cw + 24) {
+        pos = 'left';
+      } else if (pos === 'left' && spaceLeft < cw + 24 && spaceRight >= cw + 24) {
+        pos = 'right';
+      }
+
       if (pos === 'center') { gx = vw / 2 - cw / 2; gy = vh / 2 - chh / 2; }
       else if (pos === 'right') { gx = box.left + box.width + 14; gy = box.cy - chh / 2; }
       else if (pos === 'left') { gx = box.left - cw - 14; gy = box.cy - chh / 2; }
@@ -252,8 +269,8 @@
       else if (pos === 'bottom') { gx = box.cx - cw / 2; gy = box.top + box.height + 14; }
       else { gx = vw / 2 - cw / 2; gy = vh / 2 - chh / 2; }
     }
-    gx = Math.max(10, Math.min(gx, vw - cw - 10));
-    gy = Math.max(10, Math.min(gy, vh - chh - 10));
+    gx = Math.max(12, Math.min(gx, vw - cw - 12));
+    gy = Math.max(12, Math.min(gy, vh - chh - 12));
     card.style.left = gx + 'px'; card.style.top = gy + 'px';
   }
 
@@ -264,20 +281,37 @@
   function attachAction() {
     detachAction();
     const st = curStep().st;
-    if (!st.action) return;
+    // Advance on element click whenever there is a target element (st.sel) OR st.action is true
+    if (!st.sel && !st.action) return;
+
     actionHandler = (e) => {
+      // Never intercept clicks on card controls or launch modal
+      if (card && (card === e.target || card.contains(e.target))) return;
+      if (launcher && (launcher === e.target || launcher.contains(e.target))) return;
+
       const target = findTarget(st.sel);
-      if (!target) return;
-      const r = target.getBoundingClientRect();
-      if (r.width === 0 || r.height === 0) return;
       let hit = false;
-      const x = e.clientX, y = e.clientY;
-      if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) hit = true;
-      if (!hit && e.composedPath) {
-        const path = e.composedPath();
-        if (path.some(el => el === target || (el instanceof Element && target.contains(el)))) hit = true;
+      if (target) {
+        const r = target.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0) {
+          const pad = (CFG.spotPad || 6) + 6;
+          const x = e.clientX, y = e.clientY;
+          if (x >= r.left - pad && x <= r.right + pad && y >= r.top - pad && y <= r.bottom + pad) hit = true;
+          if (!hit && e.composedPath) {
+            const path = e.composedPath();
+            if (path.some(el => el === target || (el instanceof Element && target.contains(el)))) hit = true;
+          }
+        }
       }
-      if (hit) { detachAction(); setTimeout(() => next(), 800); }
+      if (e.target === marker || (marker && marker.contains(e.target))) {
+        hit = true;
+      }
+      if (hit) {
+        e.preventDefault();
+        e.stopPropagation();
+        detachAction();
+        next();
+      }
     };
     document.addEventListener('click', actionHandler, true);
   }
@@ -296,8 +330,11 @@
     layer.classList.remove('on'); progress.classList.remove('on');
     marker.classList.remove('on'); hint.style.display = 'none';
   }
+  let advancing = false;
   function next() {
-    if (!running) return;
+    if (!running || advancing) return;
+    advancing = true;
+    setTimeout(() => { advancing = false; }, 300);
     const st = curStep().st;
     if (typeof st.onExit === 'function') { try { st.onExit(); } catch (e) {} }
     detachAction();
@@ -325,10 +362,10 @@
 
   $('demostudio-start').addEventListener('click', start);
   $('demostudio-dismiss').addEventListener('click', () => { launcher.classList.remove('on'); if (CFG.showOnce) { try { localStorage.setItem(CFG.storageKey, '1'); } catch (e) {} } });
-  $('demostudio-next').addEventListener('click', next);
-  $('demostudio-back').addEventListener('click', prev);
-  $('demostudio-skip').addEventListener('click', end);
-  marker.addEventListener('click', next);
+  $('demostudio-next').addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); next(); });
+  $('demostudio-back').addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); prev(); });
+  $('demostudio-skip').addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); end(); });
+  marker.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); next(); });
   document.addEventListener('keydown', (e) => {
     if (!running) return;
     if (e.key === 'ArrowRight') next();

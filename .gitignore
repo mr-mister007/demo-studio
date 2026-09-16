@@ -1,2 +1,4 @@
 node_modules/
 studio/built-tour-config.js
+built-demo/
+built-demo-config.js
