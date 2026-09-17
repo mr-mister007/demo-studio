@@ -13,23 +13,36 @@
   window.__tourStudioLoaded = true;
 
   // ── State ────────────────────────────────────────────────────
-  const LS_KEY = 'demostudio_studio_draft';
+  function getDraftKey() {
+    const host = window.location.hostname || 'target';
+    const app = (window.__TOUR_CONFIG && window.__TOUR_CONFIG.appName) || '';
+    return 'demostudio_draft_' + host + (app ? '_' + app.replace(/\s+/g, '_') : '');
+  }
   let cfg = null;
   let pickMode = false;
   let autoInspectMode = false;
   let autoCaptureMode = false;
   let editContentMode = false;
   let hoverEl = null;
-  let activeStepIdx = -1;
+  let activeChapterIdx = 0;
+  let activeStepIdx = 0;
   let dirty = false;
   let capturedScreensList = [];
   let currentScreenId = null;
   let lastCapturedUrl = '';
 
   function loadDraft() {
+    try { localStorage.removeItem('demostudio_studio_draft'); } catch (e) {}
+    const key = getDraftKey();
     try {
-      const raw = localStorage.getItem(LS_KEY);
-      if (raw) { cfg = JSON.parse(raw); return; }
+      const raw = localStorage.getItem(key);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && (!window.__TOUR_CONFIG || !window.__TOUR_CONFIG.appName || parsed.appName === window.__TOUR_CONFIG.appName)) {
+          cfg = parsed;
+          return;
+        }
+      }
     } catch (e) {}
     cfg = window.__TOUR_CONFIG ? JSON.parse(JSON.stringify(window.__TOUR_CONFIG)) : { appName: 'My App', chapters: [] };
   }
@@ -136,7 +149,13 @@
       <div id="studio-view-steps" class="studio-view">
         <div class="studio-split">
           <div class="studio-col">
-            <div class="studio-col-head">Chapters & Steps</div>
+            <div class="studio-col-head" style="display:flex;justify-content:space-between;align-items:center;">
+              <span>Chapters & Steps</span>
+              <button id="studio-add-chapter-btn" class="studio-mini" title="Add Chapter" style="padding:2px 8px;font-size:11px;display:inline-flex;align-items:center;gap:3px;cursor:pointer;border-radius:6px;background:var(--md-secondary-container);color:var(--md-on-secondary-container);border:none;">
+                <span class="material-symbols-outlined" style="font-size:13px;">add</span>
+                <span>Chapter</span>
+              </button>
+            </div>
             <div id="studio-chapters"></div>
           </div>
           <div class="studio-col">
@@ -187,7 +206,7 @@
         </div>
       </div>
     </div>
-    <div id="studio-hover"></div>
+    <div id="studio-hover" style="display:none;"></div>
   `;
   document.body.appendChild(wrap);
 
@@ -326,20 +345,33 @@
       }
     }
 
-    // 6) Clean Class Selector
+    // 6) Clean Class Selector (filter out CSS-in-JS hashes, emotion classes like css-123gyud, tailwind arbitrary, etc.)
     if (el.className && typeof el.className === 'string') {
-      const classes = el.className.split(/\s+/).filter(c => c && !/^\d/.test(c) && !c.startsWith('_') && !c.includes(':') && c.length > 2);
-      if (classes.length) {
-        try {
-          const s = el.tagName.toLowerCase() + '.' + classes.map(c => CSS.escape(c)).join('.');
-          if (document.querySelectorAll(s).length === 1) return s;
-        } catch (e) {}
-        for (const c of classes) {
+      const isNoiseClass = c => {
+        if (!c || c.length <= 2) return true;
+        if (/^\d/.test(c) || c.startsWith('_') || c.includes(':')) return true;
+        // Emotion / styled-components / CSS modules hashes (e.g. css-123gyud, jss123, sc-bdVaJa)
+        if (/^css-[a-z0-9]{4,10}$/i.test(c)) return true;
+        if (/^[a-z0-9_-]{18,}$/i.test(c)) return true;
+        return false;
+      };
+
+      const classes = el.className.split(/\s+/).filter(c => !isNoiseClass(c));
+      // Deduplicate class names (React/MUI often duplicates them)
+      const uniqueClasses = Array.from(new Set(classes));
+
+      if (uniqueClasses.length) {
+        // Try top 1 or 2 most descriptive semantic classes
+        for (const c of uniqueClasses) {
           try {
             const s = `${el.tagName.toLowerCase()}.${CSS.escape(c)}`;
             if (document.querySelectorAll(s).length === 1) return s;
           } catch (e) {}
         }
+        try {
+          const s = el.tagName.toLowerCase() + '.' + uniqueClasses.slice(0, 3).map(c => CSS.escape(c)).join('.');
+          if (document.querySelectorAll(s).length === 1) return s;
+        } catch (e) {}
       }
     }
 
@@ -359,7 +391,7 @@
       }
 
       if (curr.className && typeof curr.className === 'string') {
-        const cls = curr.className.split(/\s+/).find(c => c && !/^\d/.test(c) && !c.startsWith('_') && !c.includes(':') && c.length > 2);
+        const cls = curr.className.split(/\s+/).find(c => c && !/^\d/.test(c) && !c.startsWith('_') && !c.includes(':') && !/^css-[a-z0-9]{4,10}$/i.test(c) && c.length > 2);
         if (cls) seg += '.' + CSS.escape(cls);
       }
 
@@ -410,7 +442,7 @@
       hoverBox.style.display = 'none';
       return;
     }
-    hoverEl = e.target;
+    hoverEl = e.target.closest('button, a, [role="button"], input, select, textarea, [tabindex]') || e.target;
     const r = hoverEl.getBoundingClientRect();
     hoverBox.style.display = 'block';
     hoverBox.style.top = `${r.top}px`;
@@ -425,10 +457,11 @@
     e.preventDefault();
     e.stopPropagation();
 
-    const sel = selectorFor(hoverEl);
+    const targetEl = hoverEl.closest('button, a, [role="button"], input, select, textarea, [tabindex]') || hoverEl;
+    const sel = selectorFor(targetEl);
     if (!sel) { flash('Could not generate selector'); return; }
 
-    const step = addStepForElement(hoverEl, sel);
+    const step = addStepForElement(targetEl, sel);
     setPick(false);
     showStudioToast(`Step added: "${step.title}"`, 'check');
   }, true);
@@ -563,7 +596,7 @@
     if (!isRecordingSession) return;
     if (e.target.closest('#demostudio-studio, #studio-rec-bar, #studio-ai-modal, #studio-floating-toast')) return;
 
-    const target = e.target;
+    const target = e.target.closest('button, a, [role="button"], input, select, textarea, [tabindex], [onclick]') || e.target;
     const sel = selectorFor(target);
     if (!sel) return;
 
@@ -670,6 +703,8 @@
         if (data.config.launchBody) cfg.launchBody = data.config.launchBody;
 
         dirty = true;
+        activeChapterIdx = 0;
+        activeStepIdx = 0;
         renderChapters();
         renderEditor();
         await save();
@@ -713,7 +748,10 @@
     if (!cfg.chapters.length) {
       cfg.chapters.push({ title: 'Chapter 1', steps: [] });
     }
-    const ch = cfg.chapters[cfg.chapters.length - 1];
+    let ci = (activeChapterIdx >= 0 && activeChapterIdx < cfg.chapters.length)
+      ? activeChapterIdx
+      : (cfg.chapters.length - 1);
+    const ch = cfg.chapters[ci];
     const text = (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 30);
     const step = {
       title: text ? `Explore ${text}` : 'Action Step',
@@ -726,11 +764,12 @@
       step.screenId = currentScreenId;
     }
     ch.steps.push(step);
+    activeChapterIdx = ci;
     activeStepIdx = ch.steps.length - 1;
     dirty = true;
     renderChapters();
     renderEditor();
-    flash(`Step added for: ${sel}`);
+    flash(`Step added to Chapter ${ci + 1}: ${sel}`);
     return step;
   }
 
@@ -778,16 +817,113 @@
     }
   }
 
+  // ── DOM State Fingerprinting & Deduplication ────────────────
+  let lastFingerprint = '';
+
+  function getDomFingerprint() {
+    try {
+      const url = window.location.pathname + window.location.search + window.location.hash;
+
+      // 1. Detect open dialogs, modals, or slide-over drawers
+      const modal = document.querySelector(
+        '[role="dialog"]:not([aria-hidden="true"]), dialog[open], .MuiDialog-root, .modal.show, .MuiDrawer-root'
+      );
+      let modalSig = '';
+      if (modal && modal.offsetParent !== null) {
+        const mh = modal.querySelector('h1, h2, h3, .modal-title, .MuiDialogTitle-root, [class*="title" i]');
+        modalSig = '[modal:' + (mh ? mh.textContent.trim().slice(0, 40) : modal.className) + ']';
+      }
+
+      // 2. Detect active tab
+      const activeTab = document.querySelector(
+        '[role="tab"][aria-selected="true"], .nav-link.active, .tab.active, button[aria-selected="true"]'
+      );
+      const tabSig = activeTab ? ('[tab:' + activeTab.textContent.trim().slice(0, 30) + ']') : '';
+
+      // 3. Detect main page heading
+      const mainEl = document.querySelector('main, [role="main"], #root, #app') || document.body;
+      const h1 = mainEl.querySelector('h1, h2');
+      const h1Sig = h1 ? ('[h1:' + h1.textContent.trim().slice(0, 40) + ']') : '';
+
+      // 4. Structural text sample (first 80 chars, last 80 chars, total text length)
+      const rawText = (mainEl.innerText || '').replace(/\s+/g, ' ').trim();
+      const textSample = rawText.slice(0, 80) + '::' + rawText.slice(-80) + '::' + rawText.length;
+
+      return `${url}__${modalSig}__${tabSig}__${h1Sig}__${textSample}`;
+    } catch (e) {
+      return window.location.href;
+    }
+  }
+
+  function detectScreenTitle(defaultTitle) {
+    try {
+      // 1. Check for visible modal dialog
+      const modal = document.querySelector(
+        '[role="dialog"]:not([aria-hidden="true"]), dialog[open], .MuiDialog-root, .modal.show'
+      );
+      if (modal && modal.offsetParent !== null) {
+        const mh = modal.querySelector('h1, h2, h3, .modal-title, .MuiDialogTitle-root, [class*="title" i]');
+        if (mh && mh.textContent.trim()) {
+          return mh.textContent.trim().slice(0, 40) + ' (Dialog)';
+        }
+        return 'Dialog View';
+      }
+
+      // 2. Check for active tab
+      const activeTab = document.querySelector(
+        '[role="tab"][aria-selected="true"], .nav-link.active, .tab.active, button[aria-selected="true"]'
+      );
+      if (activeTab && activeTab.textContent.trim()) {
+        const tabName = activeTab.textContent.trim().slice(0, 30);
+        const h1 = document.querySelector('h1');
+        if (h1 && h1.textContent.trim() && !h1.textContent.includes(tabName)) {
+          return `${h1.textContent.trim().slice(0, 25)} — ${tabName}`;
+        }
+        return `${tabName} View`;
+      }
+
+      // 3. Check for main page heading
+      const h1 = document.querySelector('main h1, [role="main"] h1, h1');
+      if (h1 && h1.textContent.trim()) {
+        return h1.textContent.trim().slice(0, 45);
+      }
+
+      // 4. Fallback to URL path or document title
+      const curPath = window.location.pathname;
+      if (curPath && curPath !== '/' && curPath.length > 1) {
+        const slug = curPath.split('/').filter(Boolean).pop();
+        if (slug) {
+          const clean = slug.replace(/[-_]/g, ' ');
+          return clean.charAt(0).toUpperCase() + clean.slice(1);
+        }
+      }
+    } catch (e) {}
+    return defaultTitle || document.title || ('Screen ' + (capturedScreensList.length + 1));
+  }
+
   function triggerAutoCapture(reason = 'Navigation') {
     if (!autoCaptureMode || !window.__DemoStudioSnapshot) return;
     clearTimeout(autoCaptureTimer);
     autoCaptureTimer = setTimeout(async () => {
+      const currentFp = getDomFingerprint();
+      // If the view/DOM state did not genuinely change, skip duplicate screen capture!
+      if (lastFingerprint && currentFp === lastFingerprint) {
+        return;
+      }
+
       const curUrl = window.location.pathname + window.location.search;
-      const title = document.title || (curUrl !== '/' ? curUrl : ('Screen ' + (capturedScreensList.length + 1)));
+      const title = detectScreenTitle();
       const prevScreenId = currentScreenId;
 
       const newId = await snapshotCurrentScreen(title);
       if (newId) {
+        // If server or client matched existing duplicate screen, don't re-toast or link
+        if (prevScreenId && newId === prevScreenId) {
+          lastFingerprint = currentFp;
+          return;
+        }
+
+        lastFingerprint = currentFp;
         currentScreenId = newId;
         lastCapturedUrl = curUrl;
         await fetchScreens();
@@ -809,14 +945,14 @@
         if (isRecordingSession) {
           if (recordedSessionActions.length) {
             const prev = recordedSessionActions[recordedSessionActions.length - 1];
-            if (prevScreenId && prevScreenId !== newId && !prev.targetScreen) {
+            if (prevScreenId && prevScreenId !== newId) {
               prev.targetScreen = newId;
             }
           }
           updateRecBarStats();
         }
       }
-    }, 450);
+    }, 300);
   }
 
   function startAutoCaptureObserver() {
@@ -860,9 +996,14 @@
   function onInteractiveNavClick(e) {
     if (!autoCaptureMode) return;
     if (pickMode) return; // In pick mode, handled by element click
-    if (e.target.closest('#demostudio-studio, #demostudio-layer, #demostudio-launch, #studio-floating-toast')) return;
+    if (e.target.closest('#demostudio-studio, #demostudio-layer, #demostudio-launch, #studio-rec-bar, #studio-ai-modal, #studio-floating-toast')) return;
 
-    const navEl = e.target.closest('a, button, [role="button"], [role="tab"], [role="menuitem"], nav *');
+    // Filter out clicks on inputs, checkboxes, radios or options that don't transition screens
+    const target = e.target;
+    if (['INPUT', 'TEXTAREA', 'SELECT', 'OPTION'].includes(target.tagName)) return;
+    if (target.type === 'checkbox' || target.type === 'radio') return;
+
+    const navEl = target.closest('a, button, [role="button"], [role="tab"], [role="menuitem"], nav *');
     if (navEl) {
       triggerAutoCapture('userClick');
     }
@@ -931,7 +1072,7 @@
     }
     flash('Capturing screen state…');
     const screenId = 'screen_' + Date.now();
-    const screenName = customName || document.title || ('Screen ' + ((cfg.chapters?.length || 0) + 1));
+    const screenName = customName || detectScreenTitle();
     const captured = window.__DemoStudioSnapshot.captureScreen(screenId, screenName);
 
     try {
@@ -947,8 +1088,12 @@
       });
       const data = await res.json();
       if (data.ok) {
+        if (data.duplicate) {
+          console.log('[Snapshot] Reusing existing duplicate screen:', data.screenId);
+          return data.screenId;
+        }
         flash(`Snapshot saved (${data.totalScreens} screens in sandbox)`);
-        return screenId;
+        return data.screenId || screenId;
       }
     } catch (e) {
       console.warn('Snapshot error:', e);
@@ -970,6 +1115,7 @@
     const savedKey = localStorage.getItem('demostudio_ai_key') || '';
     const savedEndpoint = localStorage.getItem('demostudio_ai_endpoint') || '';
     const savedModel = localStorage.getItem('demostudio_ai_model') || (savedProvider === 'gemini' ? 'gemini-2.5-flash' : '');
+    const savedRoutes = localStorage.getItem('demostudio_custom_routes') || '';
 
     modal.innerHTML = `
       <div style="background:var(--md-sys-color-surface-container, #1e1f25);border:1px solid var(--md-sys-color-outline-variant, #44474f);border-radius:24px;padding:28px;width:480px;max-width:92%;color:#e2e2e9;box-shadow:0 8px 32px rgba(0,0,0,0.6);font-family:'Roboto', sans-serif;">
@@ -1015,9 +1161,15 @@
           <input id="ai-modal-model" type="text" placeholder="gemini-2.5-flash" value="${escAttr(savedModel || 'gemini-2.5-flash')}" style="width:100%;height:44px;padding:0 12px;border-radius:12px;background:#282a30;border:1px solid #44474f;color:#e2e2e9;font-size:13px;outline:none;font-family:inherit;" />
         </div>
 
-        <div id="ai-endpoint-row" style="margin-bottom:20px; ${savedProvider === 'local' ? '' : 'display:none;'}">
+        <div id="ai-endpoint-row" style="margin-bottom:14px; ${savedProvider === 'local' ? '' : 'display:none;'}">
           <label style="display:block;font-size:11px;font-weight:500;color:#a8c7fa;margin-bottom:6px;letter-spacing:0.02em;">CUSTOM ENDPOINT</label>
           <input id="ai-modal-endpoint" type="text" placeholder="http://localhost:1234/v1/chat/completions" value="${escAttr(savedEndpoint)}" style="width:100%;height:44px;padding:0 12px;border-radius:12px;background:#282a30;border:1px solid #44474f;color:#e2e2e9;font-size:13px;outline:none;font-family:inherit;" />
+        </div>
+
+        <div style="margin-bottom:20px;">
+          <label style="display:block;font-size:11px;font-weight:500;color:#a8c7fa;margin-bottom:6px;letter-spacing:0.02em;">TARGET ROUTES TO CRAWL (OPTIONAL)</label>
+          <input id="ai-modal-routes" type="text" placeholder="/okr, /dashboard, /settings" value="${escAttr(savedRoutes)}" style="width:100%;height:44px;padding:0 12px;border-radius:12px;background:#282a30;border:1px solid #44474f;color:#e2e2e9;font-size:13px;outline:none;font-family:inherit;" />
+          <div style="font-size:11px;color:#8e9099;margin-top:6px;">Comma-separated SPA routes to autonomously visit and capture.</div>
         </div>
 
         <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:10px;">
@@ -1069,11 +1221,13 @@
       const key = (keyInput.value || '').trim();
       const endpoint = (document.getElementById('ai-modal-endpoint').value || '').trim();
       const model = (modelInput.value || '').trim();
+      const routes = (document.getElementById('ai-modal-routes')?.value || '').trim();
 
       localStorage.setItem('demostudio_ai_provider', provider);
       localStorage.setItem('demostudio_ai_key', key);
       localStorage.setItem('demostudio_ai_endpoint', endpoint);
       localStorage.setItem('demostudio_ai_model', model);
+      localStorage.setItem('demostudio_custom_routes', routes);
 
       modal.style.display = 'none';
       flash(`Connected: ${provider === 'gemini' ? 'Google Gemini' : provider}`);
@@ -1187,7 +1341,8 @@
 
       // Penalties for tiny or very deep elements
       if (r.top > vh * 2) score -= 50;
-      if (r.width < 20 || r.height < 20) score -= 25;
+      const href = (tag === 'A' ? el.getAttribute('href') : null) || null;
+      const isNav = zone === 'navigation' || !!href || tag === 'A' || el.getAttribute('role') === 'tab';
 
       rawElements.push({
         tag,
@@ -1197,6 +1352,8 @@
         zone,
         optimalPos,
         score,
+        href,
+        isNav,
         top: Math.round(r.top),
         left: Math.round(r.left)
       });
@@ -1221,40 +1378,195 @@
     return elements;
   }
 
-  // ── 1-Click AI Auto-Demo (Zero Manual Effort) ─────────────────
+  // ── 1-Click Multi-Page Autonomous AI Demo Engine ─────────────
   async function aiAutoDemo() {
     const btn = document.querySelector('#studio-ai-auto');
     btn.disabled = true;
-    const orig = btn.textContent;
-    btn.textContent = 'Generating…';
+    const orig = btn.innerHTML;
+    btn.innerHTML = '<span class="studio-rec-dot"></span><span>Crawling Pages…</span>';
 
     try {
-      // Step 1: Capture DOM snapshot of the screen
-      flash('Capturing screen state…');
-      const screenId = await snapshotCurrentScreen('Main View');
+      showStudioToast('Starting Autonomous Multi-Page Demo Crawl...', 'auto_awesome');
+      flash('Starting autonomous multi-page capture…');
 
-      // Step 2: Collect DOM inventory (with SPA hydration wait)
-      flash('Analyzing page elements…');
-      const dom = await waitForElements();
-      if (!dom.length) {
-        flash('No elements detected yet. Please ensure the app page is fully loaded or logged in.', 4000);
-        return;
+      // 1. Snapshot Initial Primary View
+      const primaryTitle = detectScreenTitle('Primary View');
+      const primaryScreenId = await snapshotCurrentScreen(primaryTitle);
+      const primaryDom = await waitForElements(1500);
+
+      const visitedScreens = [{
+        screenId: primaryScreenId,
+        screenName: primaryTitle,
+        url: window.location.pathname,
+        dom: primaryDom
+      }];
+
+      // 2. Discover Navigation Routes & Targets
+      // Check for user-defined custom routes first (from Settings)
+      const customRoutesRaw = localStorage.getItem('demostudio_custom_routes') || '';
+      const customRoutes = customRoutesRaw
+        .split(/[,\n]/)
+        .map(r => r.trim())
+        .filter(r => r && r !== window.location.pathname);
+
+      const navTargets = [];
+      const seenNavKeys = new Set([primaryTitle.toLowerCase(), window.location.pathname]);
+
+      // Synthetic Event Dispatcher for modern React / MUI / SPA event listeners
+      function triggerSpaClick(targetEl) {
+        if (!targetEl) return;
+        const rect = targetEl.getBoundingClientRect();
+        const clientX = rect.left + rect.width / 2;
+        const clientY = rect.top + rect.height / 2;
+        const opts = { bubbles: true, cancelable: true, view: window, clientX, clientY };
+
+        try { targetEl.dispatchEvent(new PointerEvent('pointerdown', opts)); } catch (e) {}
+        try { targetEl.dispatchEvent(new MouseEvent('mousedown', opts)); } catch (e) {}
+        try { targetEl.focus(); } catch (e) {}
+        try { targetEl.dispatchEvent(new PointerEvent('pointerup', opts)); } catch (e) {}
+        try { targetEl.dispatchEvent(new MouseEvent('mouseup', opts)); } catch (e) {}
+        try { targetEl.click(); } catch (e) {}
       }
-      flash(`Analyzing ${dom.length} page elements…`);
 
-      // Read configured AI settings
+      // If custom routes provided, prioritize them
+      if (customRoutes.length > 0) {
+        for (const route of customRoutes.slice(0, 3)) {
+          navTargets.push({
+            type: 'route',
+            path: route,
+            text: route.replace(/^\//, '').toUpperCase() || 'Home',
+            sel: 'body'
+          });
+        }
+      } else {
+        // Query rich SPA navigation elements:
+        // Sidebar rails, MUI icon buttons, tabs, aria-label links, and standard nav links
+        const navCandidates = Array.from(document.querySelectorAll(
+          'nav a, nav button, aside a, aside button, ' +
+          '[role="navigation"] a, [role="navigation"] button, [role="tab"], ' +
+          '.MuiTab-root, .MuiIconButton-root, [class*="sidebar" i] button, [class*="sidebar" i] a, ' +
+          '[class*="rail" i] button, [class*="drawer" i] button, [class*="nav" i] button, [class*="nav" i] a'
+        )).filter(el => {
+          if (el.closest('#demostudio-studio, #studio-rec-bar, #studio-ai-modal, #studio-floating-toast')) return false;
+          if (el.offsetWidth === 0 || el.offsetHeight === 0) return false;
+
+          // Don't click studio controls or utility buttons
+          const titleOrAria = (el.getAttribute('title') || el.getAttribute('aria-label') || '').toLowerCase();
+          if (titleOrAria.includes('logout') || titleOrAria.includes('sign out') || titleOrAria.includes('delete') || titleOrAria.includes('theme') || titleOrAria.includes('mode')) return false;
+
+          // Check if button is placed in sidebar rail (left edge) or top navigation bar
+          const rect = el.getBoundingClientRect();
+          const isInLeftRail = rect.left < 200 && rect.width <= 120;
+          const isInTopNav = rect.top < 90 && rect.height <= 80;
+          const isExplicitNav = !!el.closest('nav, aside, [role="navigation"], [role="tablist"]');
+
+          if (!isInLeftRail && !isInTopNav && !isExplicitNav) return false;
+
+          if (el.tagName === 'A') {
+            const href = el.getAttribute('href');
+            if (!href || href === '#' || href.startsWith('javascript:') || href.startsWith('mailto:')) return false;
+            try {
+              const urlObj = new URL(href, window.location.href);
+              if (urlObj.origin !== window.location.origin) return false;
+              if (urlObj.pathname === window.location.pathname && !urlObj.search) return false;
+            } catch (e) {
+              return false;
+            }
+          }
+          return true;
+        });
+
+        // Filter and collect distinct navigation targets (up to 3 distinct destinations)
+        for (const el of navCandidates) {
+          const text = (el.getAttribute('aria-label') || el.getAttribute('title') || el.textContent || '').trim();
+          const tag = el.tagName.toUpperCase();
+          const href = el.getAttribute('href') || '';
+          const key = (href || text || el.className).slice(0, 40).toLowerCase();
+
+          if (seenNavKeys.has(key)) continue;
+          seenNavKeys.add(key);
+
+          const sel = selectorFor(el);
+          if (!sel) continue;
+
+          navTargets.push({
+            type: 'dom',
+            el,
+            text: text || (href ? href.replace(/^\//, '') : 'View ' + (navTargets.length + 2)),
+            sel,
+            href
+          });
+
+          if (navTargets.length >= 3) break;
+        }
+      }
+
+      // 3. Visit and Snapshot Navigation Views
+      const initialPath = window.location.pathname;
+      const initialDomHash = (primaryDom || []).slice(0, 10).map(d => d.text).join('|');
+
+      for (let i = 0; i < navTargets.length; i++) {
+        const nav = navTargets[i];
+        flash(`Exploring ${nav.text}… (${i + 1}/${navTargets.length})`);
+        btn.innerHTML = `<span class="studio-rec-dot"></span><span>Page ${i + 2}…</span>`;
+
+        try {
+          if (nav.type === 'route') {
+            // Direct SPA route push
+            if (window.history && window.history.pushState) {
+              window.history.pushState({}, '', nav.path);
+              window.dispatchEvent(new PopStateEvent('popstate'));
+            } else {
+              window.location.pathname = nav.path;
+            }
+            await new Promise(r => setTimeout(r, 1400));
+          } else {
+            // Trigger synthetic click on SPA element
+            triggerSpaClick(nav.el);
+            // Wait for potential client-side route change or view transition
+            await new Promise(r => setTimeout(r, 1400));
+          }
+
+          // Check if view actually mutated
+          const nextDom = await waitForElements(1800);
+          const nextDomHash = (nextDom || []).slice(0, 10).map(d => d.text).join('|');
+
+          // Only snapshot if the page or DOM structure actually changed
+          if (window.location.pathname !== initialPath || nextDomHash !== initialDomHash) {
+            const nextTitle = detectScreenTitle(nav.text);
+            const nextScreenId = await snapshotCurrentScreen(nextTitle);
+
+            if (nextScreenId) {
+              visitedScreens.push({
+                screenId: nextScreenId,
+                screenName: nextTitle,
+                url: window.location.pathname,
+                dom: nextDom,
+                triggerSel: nav.sel
+              });
+            }
+          }
+        } catch (navErr) {
+          console.warn('[Auto-Demo Crawler] Navigation attempt error:', navErr);
+        }
+      }
+
+      flash(`Synthesizing multi-page demo (${visitedScreens.length} pages captured)…`);
+      btn.innerHTML = '<span>Synthesizing…</span>';
+
+      // 4. Request Multi-Page AI Tour Synthesis
       const provider = localStorage.getItem('demostudio_ai_provider') || 'gemini';
       const apiKey = localStorage.getItem('demostudio_ai_key') || undefined;
       const llmEndpoint = localStorage.getItem('demostudio_ai_endpoint') || undefined;
       const llmModel = localStorage.getItem('demostudio_ai_model') || undefined;
       const metaDescription = document.querySelector('meta[name="description"]')?.content || '';
 
-      // Step 3: Request AI Journey & Story Generation
       const res = await fetch('/__tour/studio/ai-generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          dom,
+          dom: visitedScreens[0].dom,
+          screens: visitedScreens,
           url: location.href,
           appName: document.title || 'My Application',
           provider,
@@ -1269,34 +1581,53 @@
       if (!data.ok) throw new Error(data.error || 'AI generation failed');
       if (!data.config || !data.config.chapters?.length) throw new Error('AI returned empty demo');
 
-      // Associate steps with captured screenId
-      data.config.chapters.forEach(ch => {
-        ch.steps.forEach(st => {
-          if (!st.screenId) st.screenId = screenId;
+      // Link screen transitions across chapters
+      if (visitedScreens.length > 1) {
+        data.config.chapters.forEach((ch, cIdx) => {
+          const sc = visitedScreens[cIdx] || visitedScreens[visitedScreens.length - 1];
+          ch.steps.forEach(st => {
+            if (!st.screenId) st.screenId = sc.screenId;
+          });
+          // Set transition on the last step of previous chapter to current chapter's screen
+          if (cIdx > 0 && data.config.chapters[cIdx - 1]?.steps?.length) {
+            const prevSteps = data.config.chapters[cIdx - 1].steps;
+            prevSteps[prevSteps.length - 1].targetScreen = sc.screenId;
+            prevSteps[prevSteps.length - 1].action = true;
+          }
         });
-      });
+      } else {
+        data.config.chapters.forEach(ch => {
+          ch.steps.forEach(st => {
+            if (!st.screenId) st.screenId = primaryScreenId;
+          });
+        });
+      }
 
       cfg = data.config;
       dirty = true;
-      try { localStorage.setItem(LS_KEY, JSON.stringify(cfg)); } catch (e) {}
+      try { localStorage.setItem(getDraftKey(), JSON.stringify(cfg)); } catch (e) {}
 
-      renderChapters();
+      activeChapterIdx = 0;
       activeStepIdx = 0;
+      await fetchScreens();
+      renderChapters();
       renderEditor();
 
       // Auto-save to server
       await save();
 
       const totalSteps = cfg.chapters.reduce((a, c) => a + (c.steps || []).length, 0);
-      flash(`Demo generated (${cfg.chapters.length} chapters, ${totalSteps} steps)`);
+      showStudioToast(`Multi-page demo generated! (${cfg.chapters.length} chapters across ${visitedScreens.length} pages)`, 'auto_awesome');
+      flash(`Multi-page demo generated (${cfg.chapters.length} chapters, ${totalSteps} steps)`);
 
       // Immediately launch live preview
       setTimeout(preview, 600);
     } catch (e) {
+      console.error('[AI Auto-Demo]', e);
       flash('Error: ' + e.message, 3500);
     } finally {
       btn.disabled = false;
-      btn.textContent = orig;
+      btn.innerHTML = orig;
     }
   }
 
@@ -1332,21 +1663,26 @@
   // ── Render Steps & Chapters ──────────────────────────────────
   function renderChapters() {
     chaptersEl.innerHTML = '';
+    if (!cfg.chapters.length) {
+      chaptersEl.innerHTML = '<div class="studio-empty">No chapters created. Click <b>+ Chapter</b> above to get started.</div>';
+      return;
+    }
     cfg.chapters.forEach((ch, ci) => {
       const sec = document.createElement('div');
       sec.className = 'studio-chapter';
       const title = document.createElement('div');
       title.className = 'studio-chapter-title';
       title.innerHTML = `
-        <span>${esc(ch.title) || ('Chapter ' + (ci + 1))}</span>
+        <span style="font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(ch.title) || ('Chapter ' + (ci + 1))}</span>
         <span class="studio-chapter-count">${ch.steps.length}</span>
+        <button class="studio-mini studio-step-add-btn" data-ci="${ci}" title="Add step to this chapter" style="margin-left:auto;margin-right:3px;">+ Step</button>
         <button class="studio-mini studio-ch-del" data-ci="${ci}" title="Delete chapter">✕</button>
       `;
       sec.appendChild(title);
 
       ch.steps.forEach((s, si) => {
         const row = document.createElement('div');
-        const isActive = activeStepIdx === si;
+        const isActive = (activeChapterIdx === ci && activeStepIdx === si);
         row.className = 'studio-step' + (isActive ? ' on' : '');
         row.innerHTML = `
           <span class="studio-step-num">${ci + 1}.${si + 1}</span>
@@ -1355,6 +1691,7 @@
           <button class="studio-mini studio-step-del" data-ci="${ci}" data-si="${si}" title="Delete step">✕</button>
         `;
         row.addEventListener('click', () => {
+          activeChapterIdx = ci;
           activeStepIdx = si;
           renderChapters();
           renderEditor();
@@ -1366,18 +1703,52 @@
   }
 
   function renderEditor() {
-    if (activeStepIdx < 0 || !cfg.chapters.length) {
-      editorEl.innerHTML = '<div class="studio-empty">Select a step to edit, or click <b>Auto Demo</b> to generate a walkthrough.</div>';
+    if (!cfg.chapters.length) {
+      editorEl.innerHTML = '<div class="studio-empty">No chapters or steps yet. Click <b>+ Chapter</b> or run <b>Auto Demo</b>.</div>';
       return;
     }
-    const ch = cfg.chapters[0];
-    const s = ch.steps[activeStepIdx] || ch.steps[0];
+    if (activeChapterIdx < 0 || activeChapterIdx >= cfg.chapters.length) {
+      activeChapterIdx = 0;
+    }
+    const ch = cfg.chapters[activeChapterIdx];
+    if (!ch || !ch.steps || !ch.steps.length) {
+      editorEl.innerHTML = `<div class="studio-empty">Chapter "${esc(ch?.title || 'Chapter ' + (activeChapterIdx + 1))}" has no steps.<br><br><button class="studio-btn studio-primary" id="ed-add-first-step" style="padding:4px 10px;font-size:11.5px;">+ Add Step</button></div>`;
+      const btn = editorEl.querySelector('#ed-add-first-step');
+      if (btn) {
+        btn.addEventListener('click', () => {
+          ch.steps.push({
+            title: 'New Step',
+            body: 'Click or inspect an element to proceed.',
+            sel: 'body',
+            pos: 'bottom',
+            action: true
+          });
+          activeStepIdx = 0;
+          dirty = true;
+          renderChapters();
+          renderEditor();
+        });
+      }
+      return;
+    }
+    if (activeStepIdx < 0 || activeStepIdx >= ch.steps.length) {
+      activeStepIdx = 0;
+    }
+    const s = ch.steps[activeStepIdx];
     if (!s) {
       editorEl.innerHTML = '<div class="studio-empty">Select a step to edit.</div>';
       return;
     }
 
     editorEl.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--md-outline-variant);">
+        <span style="font-size:11px;font-weight:600;color:var(--md-primary);text-transform:uppercase;letter-spacing:0.04em;">
+          Chapter ${activeChapterIdx + 1} &bull; Step ${activeStepIdx + 1}
+        </span>
+        <span style="font-size:11px;color:var(--md-outline);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+          ${esc(ch.title || '')}
+        </span>
+      </div>
       <div class="studio-field">
         <label>
           <span class="material-symbols-outlined" style="font-size:14px;">title</span>
@@ -1515,8 +1886,11 @@
 
   async function connectTarget() {
     const input = document.querySelector('#studio-url');
-    const url = (input.value || '').trim();
+    let url = (input.value || '').trim();
     if (!url) { flash('Please enter a valid URL'); return; }
+    if (!/^https?:\/\//i.test(url)) {
+      url = 'https://' + url;
+    }
     flash('Connecting to ' + url + '…');
     try {
       const res = await fetch('/__tour/studio/target', {
@@ -1526,9 +1900,16 @@
       });
       const data = await res.json();
       if (data.ok) {
-        try { localStorage.removeItem(LS_KEY); } catch (e) {}
+        try {
+          for (let i = localStorage.length - 1; i >= 0; i--) {
+            const k = localStorage.key(i);
+            if (k && (k.startsWith('demostudio_draft') || k.startsWith('demostudio_studio'))) localStorage.removeItem(k);
+          }
+        } catch (e) {}
         flash('Connected: ' + data.target);
-        setTimeout(() => location.reload(), 600);
+        setTimeout(() => {
+          location.href = '/?mode=studio';
+        }, 500);
       } else {
         flash(data.error || 'Connection failed');
       }
@@ -1777,7 +2158,7 @@
             propCard.querySelector('button').onclick = async () => {
               cfg = data.updatedConfig;
               dirty = true;
-              try { localStorage.setItem(LS_KEY, JSON.stringify(cfg)); } catch (e) {}
+              try { localStorage.setItem(getDraftKey(), JSON.stringify(cfg)); } catch (e) {}
               renderChapters();
               renderEditor();
               await save();
@@ -1871,33 +2252,91 @@
     }
   });
 
-  // Step/Chapter Deletion
+  // Add Chapter Button Handler
+  const addChBtn = wrap.querySelector('#studio-add-chapter-btn');
+  if (addChBtn) {
+    addChBtn.addEventListener('click', () => {
+      const newChIdx = cfg.chapters.length + 1;
+      cfg.chapters.push({
+        title: `Chapter ${newChIdx}`,
+        steps: [{
+          title: `Step 1`,
+          body: `Describe this step or action.`,
+          sel: 'body',
+          pos: 'bottom',
+          action: true
+        }]
+      });
+      activeChapterIdx = cfg.chapters.length - 1;
+      activeStepIdx = 0;
+      dirty = true;
+      renderChapters();
+      renderEditor();
+      flash(`Chapter ${newChIdx} created`);
+    });
+  }
+
+  // Step/Chapter Deletion and Addition via Chapters List
   chaptersEl.addEventListener('click', e => {
+    const addStepBtn = e.target.closest('.studio-step-add-btn');
+    if (addStepBtn) {
+      e.stopPropagation();
+      const ci = +addStepBtn.dataset.ci;
+      if (cfg.chapters[ci]) {
+        cfg.chapters[ci].steps.push({
+          title: `Step ${cfg.chapters[ci].steps.length + 1}`,
+          body: 'Describe this step action.',
+          sel: 'body',
+          pos: 'bottom',
+          action: true
+        });
+        activeChapterIdx = ci;
+        activeStepIdx = cfg.chapters[ci].steps.length - 1;
+        dirty = true;
+        renderChapters();
+        renderEditor();
+        flash(`Added step to Chapter ${ci + 1}`);
+      }
+      return;
+    }
+
     const delStep = e.target.closest('.studio-step-del');
     if (delStep) {
       e.stopPropagation();
       const ci = +delStep.dataset.ci, si = +delStep.dataset.si;
-      cfg.chapters[ci].steps.splice(si, 1);
-      if (!cfg.chapters[ci].steps.length) cfg.chapters.splice(ci, 1);
-      activeStepIdx = -1;
+      if (cfg.chapters[ci] && cfg.chapters[ci].steps) {
+        cfg.chapters[ci].steps.splice(si, 1);
+        if (!cfg.chapters[ci].steps.length) {
+          cfg.chapters.splice(ci, 1);
+        }
+      }
+      activeChapterIdx = 0;
+      activeStepIdx = 0;
       dirty = true;
-      renderChapters(); renderEditor();
+      renderChapters();
+      renderEditor();
       return;
     }
+
     const delCh = e.target.closest('.studio-ch-del');
     if (delCh) {
       e.stopPropagation();
       cfg.chapters.splice(+delCh.dataset.ci, 1);
-      activeStepIdx = -1;
+      activeChapterIdx = 0;
+      activeStepIdx = 0;
       dirty = true;
-      renderChapters(); renderEditor();
+      renderChapters();
+      renderEditor();
     }
   });
 
   // Load Current Target into input
   fetch('/__tour/studio/current').then(r => r.json()).then(d => {
     const inp = document.querySelector('#studio-url');
-    if (d.target && inp) inp.placeholder = 'Current: ' + d.target;
+    if (d.target && inp) {
+      inp.value = d.target;
+      inp.placeholder = 'Current: ' + d.target;
+    }
   }).catch(() => {});
 
   initTabs();

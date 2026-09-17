@@ -230,6 +230,9 @@ body, html {
 .player-dots {
   display: flex;
   gap: 5px;
+  overflow: hidden;
+  max-width: 140px;
+  align-items: center;
 }
 
 .player-dot {
@@ -238,6 +241,11 @@ body, html {
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.2);
   transition: all 0.2s;
+  flex-shrink: 0;
+}
+
+.player-dot.done {
+  background: rgba(255, 255, 255, 0.45);
 }
 
 .player-dot.active {

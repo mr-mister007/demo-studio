@@ -285,37 +285,80 @@
     if (!st.sel && !st.action) return;
 
     actionHandler = (e) => {
-      // Never intercept clicks on card controls or launch modal
+      // Never intercept clicks on card controls or launch modal — let them bubble normally
       if (card && (card === e.target || card.contains(e.target))) return;
       if (launcher && (launcher === e.target || launcher.contains(e.target))) return;
 
+      // Ignore synthetic clicks we dispatched ourselves to avoid infinite loops
+      if (e.__demostudio) return;
+
       const target = findTarget(st.sel);
       let hit = false;
+      let markerClick = false;
+      let directClick = false; // user clicked the real element (not the marker overlay)
+
       if (target) {
         const r = target.getBoundingClientRect();
         if (r.width > 0 && r.height > 0) {
-          const pad = (CFG.spotPad || 6) + 6;
-          const x = e.clientX, y = e.clientY;
-          if (x >= r.left - pad && x <= r.right + pad && y >= r.top - pad && y <= r.bottom + pad) hit = true;
-          if (!hit && e.composedPath) {
+          // Check if click is within the element's composed path (handles shadow DOM too)
+          if (e.composedPath) {
             const path = e.composedPath();
-            if (path.some(el => el === target || (el instanceof Element && target.contains(el)))) hit = true;
+            if (path.some(el => el === target || (el instanceof Element && target.contains(el)))) {
+              hit = true;
+              directClick = true; // real element was clicked — event already going to it
+            }
+          }
+          // Fallback: bounding box hit-test
+          if (!hit) {
+            const pad = (CFG.spotPad || 6) + 6;
+            const x = e.clientX, y = e.clientY;
+            if (x >= r.left - pad && x <= r.right + pad && y >= r.top - pad && y <= r.bottom + pad) hit = true;
           }
         }
       }
+
+      // Marker overlay box click — the user clicked the highlight border, not the real element
       if (e.target === marker || (marker && marker.contains(e.target))) {
         hit = true;
+        markerClick = true;
+        directClick = false;
       }
+
       if (hit) {
-        e.preventDefault();
+        if (markerClick) {
+          // User clicked the marker overlay — stop the click (it's on a <div>, not the app element)
+          // and fire a synthetic click on the actual target so the app responds.
+          e.stopPropagation();
+          e.stopImmediatePropagation();
+          detachAction();
+          next();
+          if (target && st.action !== false) {
+            try {
+              target.focus?.();
+              const synth = new MouseEvent('click', { bubbles: true, cancelable: true, clientX: e.clientX, clientY: e.clientY });
+              synth.__demostudio = true;
+              target.dispatchEvent(synth);
+            } catch (err) {}
+          }
+        } else {
+          // User clicked the real target element directly — let the click reach the element naturally.
+          // We only advance the demo; the original event continues its journey to the element.
+          detachAction();
+          next();
+          // Do NOT stopPropagation here: the natural click must reach the element for the app to respond.
+        }
+      } else if (marker && marker.classList.contains('on')) {
+        // User clicked OUTSIDE the target spotlight while in action-step mode.
+        // Block the click entirely so stray clicks don't dismiss dialogs or close modals.
         e.stopPropagation();
-        detachAction();
-        next();
+        e.stopImmediatePropagation();
+        e.preventDefault();
       }
     };
     document.addEventListener('click', actionHandler, true);
   }
   function detachAction() { if (actionHandler) { document.removeEventListener('click', actionHandler, true); actionHandler = null; } }
+
 
   // ── Lifecycle ────────────────────────────────────────────────
   function start() {
@@ -365,7 +408,6 @@
   $('demostudio-next').addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); next(); });
   $('demostudio-back').addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); prev(); });
   $('demostudio-skip').addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); end(); });
-  marker.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); next(); });
   document.addEventListener('keydown', (e) => {
     if (!running) return;
     if (e.key === 'ArrowRight') next();
@@ -381,6 +423,13 @@
   setTimeout(tryLaunch, CFG.autoDelay);
 
   function tryLaunch() {
+    try {
+      if (new URLSearchParams(window.location.search).get('mode') === 'studio' ||
+          (document.cookie && document.cookie.includes('demostudio_mode=studio')) ||
+          document.getElementById('demostudio-studio')) {
+        return;
+      }
+    } catch (e) {}
     if (CFG.showOnce) { try { if (localStorage.getItem(CFG.storageKey)) return; } catch (e) {} }
     if (CFG.disableOnPaths && CFG.disableOnPaths.some(p => window.location.pathname.includes(p))) return;
     if (CFG.onlyOnPaths && !CFG.onlyOnPaths.some(p => window.location.pathname.includes(p))) return;

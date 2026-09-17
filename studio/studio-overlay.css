@@ -343,7 +343,27 @@
   background: var(--md-secondary-container);
   border-radius: var(--md-shape-corner-full); padding: 1px 6px;
 }
-.studio-ch-del { margin-left: auto; }
+.studio-step-add-btn {
+  margin-left: auto;
+  font-size: 10.5px !important;
+  font-weight: 500;
+  color: var(--md-primary) !important;
+  background: var(--md-surface-container) !important;
+  border: 1px solid var(--md-outline-variant) !important;
+  padding: 1px 6px !important;
+  border-radius: var(--md-shape-corner-small);
+  transition: all .15s ease;
+}
+.studio-step-add-btn:hover {
+  background: var(--md-primary) !important;
+  color: var(--md-on-primary) !important;
+  border-color: var(--md-primary) !important;
+}
+.studio-ch-del { margin-left: 2px; }
+#studio-add-chapter-btn:hover {
+  opacity: 0.9;
+  box-shadow: var(--md-elevation-1);
+}
 
 .studio-step {
   display: flex; align-items: center; gap: 8px;
@@ -427,6 +447,7 @@
 /* Hover highlight while picking */
 #studio-hover {
   position: fixed;
+  display: none;
   border: 2px solid var(--md-primary);
   border-radius: var(--md-shape-corner-small);
   background: rgba(168, 199, 250, 0.15);

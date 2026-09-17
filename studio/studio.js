@@ -14,6 +14,26 @@ const zlib = require('zlib');
 const fs = require('fs');
 const path = require('path');
 
+// ── Persistent Connection Agents & Static Asset Cache ─────────
+const httpsAgent = new https.Agent({
+  keepAlive: true,
+  maxSockets: 64,
+  maxFreeSockets: 16,
+  timeout: 60000,
+  keepAliveMsecs: 10000
+});
+
+const httpAgent = new http.Agent({
+  keepAlive: true,
+  maxSockets: 64,
+  maxFreeSockets: 16,
+  timeout: 60000,
+  keepAliveMsecs: 10000
+});
+
+const STATIC_ASSET_CACHE = new Map();
+const MAX_STATIC_CACHE_ENTRIES = 500;
+
 // ── AI Configuration & Keys ──────────────────────────────────
 let AI_KEY = process.env.OPENROUTER_API_KEY || null;
 let GEMINI_KEY = process.env.GEMINI_API_KEY || null;
@@ -61,11 +81,15 @@ const CAPTURED_SCREENS = {};
 
 // ── Target parsing ───────────────────────────────────────────
 function parseTarget(raw) {
-  const u = new URL(raw);
+  let str = String(raw || '').trim();
+  if (!/^https?:\/\//i.test(str)) {
+    str = 'https://' + str;
+  }
+  const u = new URL(str);
   const protocol = u.protocol === 'https:' ? 'https' : 'http';
   const hostname = u.hostname === 'localhost' ? '127.0.0.1' : u.hostname;
   const port = parseInt(u.port || (protocol === 'https' ? '443' : '80'), 10);
-  return { protocol, host: hostname, port, url: protocol + '://' + hostname + ':' + port + '/' };
+  return { protocol, host: hostname, port, url: protocol + '://' + hostname + (u.port ? ':' + port : '') + '/' };
 }
 let UPSTREAM = null;
 if (TARGET_URL) {
@@ -489,8 +513,15 @@ function welcomeHtml() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: u })
       }).then(r => r.json()).then(data => {
-        if (data.ok) location.href = '/';
-        else {
+        if (data.ok) {
+          try {
+            for (let i = localStorage.length - 1; i >= 0; i--) {
+              const k = localStorage.key(i);
+              if (k && (k.startsWith('demostudio_draft') || k.startsWith('demostudio_studio'))) localStorage.removeItem(k);
+            }
+          } catch(e) {}
+          location.href = '/?mode=studio';
+        } else {
           alert('Error: ' + data.error);
           if (btn) {
             btn.disabled = false;
@@ -515,10 +546,10 @@ function welcomeHtml() {
 }
 
 // ── Default Config ────────────────────────────────────────────
-function defaultCfg() {
+function defaultCfg(appName = 'DemoStudio App') {
   return {
-    appName: 'DemoStudio App',
-    launchTitle: 'Take an Interactive Product Demo',
+    appName: appName,
+    launchTitle: `Interactive Walkthrough: ${appName}`,
     launchBody: 'Explore this hands-on walkthrough with real interactions and state transitions.',
     startLabel: 'Start Demo',
     dismissLabel: 'Explore on my own',
@@ -528,6 +559,21 @@ function defaultCfg() {
 }
 let seedCfg = defaultCfg();
 let SAVED_CFG = null;
+
+function getCurrentDemoConfig() {
+  if (ACTIVE_DEMO_ID) {
+    const demo = storage.getDemo(ACTIVE_DEMO_ID);
+    if (demo && demo.config) return demo.config;
+  }
+  if (SAVED_CFG) return SAVED_CFG;
+  if (UPSTREAM && UPSTREAM.host) {
+    const hostName = UPSTREAM.host || 'New App';
+    const cleanName = hostName.replace(/^www\./, '').split('.')[0];
+    const appName = cleanName.charAt(0).toUpperCase() + cleanName.slice(1);
+    return defaultCfg(appName);
+  }
+  return seedCfg;
+}
 
 if (CONFIG_PATH && fs.existsSync(CONFIG_PATH)) {
   try {
@@ -564,11 +610,20 @@ function decompress(buf, enc) {
     else if (enc.includes('br')) fn = zlib.brotliDecompress;
     else if (enc.includes('deflate')) fn = zlib.inflate;
     else return resolve(buf);
-    fn(buf, (err, out) => (err ? reject(err) : resolve(out)));
+    fn(buf, (err, out) => {
+      if (err) {
+        console.warn('[Proxy] Decompression notice (' + enc + '), using raw buffer:', err.message);
+        return resolve(buf);
+      }
+      resolve(out);
+    });
   });
 }
 
 function injectAssets(html) {
+  // Strip inline meta Content-Security-Policy to avoid blocking styles/scripts
+  html = html.replace(/<meta\s+http-equiv=["']Content-Security-Policy["'][^>]*>/gi, '');
+
   const assets =
     '<link rel="preconnect" href="https://fonts.googleapis.com">' +
     '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>' +
@@ -809,12 +864,15 @@ function generateAutonomousHeuristicDemo(dom, appName, targetUrl, metaDescriptio
 function generateTourFromRecordedSession(actions = [], screens = [], appName = 'My App', targetUrl = '') {
   const filtered = [];
   let lastSel = null;
+  let lastType = null;
   let lastTime = 0;
   for (const a of actions) {
     const t = a.timestamp || 0;
-    if (a.sel === lastSel && t - lastTime < 1000) continue;
+    // Only filter out identical rapid double-trigger bounces within 250ms
+    if (a.sel === lastSel && a.type === lastType && (t - lastTime < 250)) continue;
     filtered.push(a);
     lastSel = a.sel;
+    lastType = a.type;
     lastTime = t;
   }
   const cleanActions = filtered.length ? filtered : actions;
@@ -916,22 +974,20 @@ const server = http.createServer((req, res) => {
   const hasStudioCookie = cookieHeader.includes('demostudio_mode=studio');
 
   // ── Reprise Management Dashboard Application ───────────────
-  if (url === '/dashboard' || url === ROUTE + 'dashboard') {
+  if (url === ROUTE + 'dashboard' || (url === '/dashboard' && !UPSTREAM)) {
     res.writeHead(200, {
       'Content-Type': 'text/html; charset=utf-8',
-      'Cache-Control': 'no-store',
-      'Set-Cookie': 'demostudio_mode=; Path=/; Max-Age=0; SameSite=Lax'
+      'Cache-Control': 'no-store'
     });
     res.end(fs.readFileSync(DASHBOARD_HTML, 'utf8'));
     return;
   }
 
-  // Root URL: Always serve Dashboard unless explicitly in studio mode
-  if ((url === '/' || url === '') && !isStudioParam && (!hasStudioCookie || !UPSTREAM)) {
+  // Root URL: Serve Dashboard ONLY if no UPSTREAM target is connected
+  if ((url === '/' || url === '') && !UPSTREAM) {
     res.writeHead(200, {
       'Content-Type': 'text/html; charset=utf-8',
-      'Cache-Control': 'no-store',
-      'Set-Cookie': 'demostudio_mode=; Path=/; Max-Age=0; SameSite=Lax'
+      'Cache-Control': 'no-store'
     });
     res.end(fs.readFileSync(DASHBOARD_HTML, 'utf8'));
     return;
@@ -1049,7 +1105,7 @@ const server = http.createServer((req, res) => {
 
   // Dynamic config endpoint
   if (url === ROUTE + 'demo-config.js') {
-    const body = 'window.__TOUR_CONFIG = ' + JSON.stringify(SAVED_CFG || seedCfg, null, 2) + ';\n';
+    const body = 'window.__TOUR_CONFIG = ' + JSON.stringify(getCurrentDemoConfig(), null, 2) + ';\n';
     res.writeHead(200, { 'Content-Type': 'application/javascript', 'Cache-Control': 'no-store' });
     res.end(body);
     return;
@@ -1058,7 +1114,7 @@ const server = http.createServer((req, res) => {
   // Current config & target status
   if (url === ROUTE + 'studio/current') {
     sendJSON(res, {
-      config: SAVED_CFG || seedCfg,
+      config: getCurrentDemoConfig(),
       target: UPSTREAM ? UPSTREAM.url : null,
       activeDemoId: ACTIVE_DEMO_ID,
       hasKey: !!AI_KEY,
@@ -1073,9 +1129,16 @@ const server = http.createServer((req, res) => {
     req.on('data', c => body += c);
     req.on('end', () => {
       try {
-        UPSTREAM = parseTarget(JSON.parse(body).url);
-        SAVED_CFG = null;
-        sendJSON(res, { ok: true, target: UPSTREAM.url });
+        const targetUrl = JSON.parse(body).url;
+        UPSTREAM = parseTarget(targetUrl);
+        ACTIVE_DEMO_ID = null;
+        SAVED_CFG = getCurrentDemoConfig();
+        for (const k of Object.keys(CAPTURED_SCREENS)) delete CAPTURED_SCREENS[k];
+        res.writeHead(200, {
+          'Content-Type': 'application/json',
+          'Set-Cookie': 'demostudio_mode=studio; Path=/; SameSite=Lax'
+        });
+        res.end(JSON.stringify({ ok: true, target: UPSTREAM.url }));
       } catch (e) { sendJSON(res, { ok: false, error: e.message }, 400); }
     });
     return;
@@ -1086,7 +1149,12 @@ const server = http.createServer((req, res) => {
     UPSTREAM = null;
     SAVED_CFG = null;
     ACTIVE_DEMO_ID = null;
-    sendJSON(res, { ok: true });
+    for (const k of Object.keys(CAPTURED_SCREENS)) delete CAPTURED_SCREENS[k];
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Set-Cookie': 'demostudio_mode=; Path=/; Max-Age=0; SameSite=Lax'
+    });
+    res.end(JSON.stringify({ ok: true }));
     return;
   }
 
@@ -1118,6 +1186,21 @@ const server = http.createServer((req, res) => {
       try {
         const { screenId, screenName, html, meta } = JSON.parse(body);
         const id = screenId || ('screen_' + Date.now());
+
+        // Check for duplicate screen against existing captured screens
+        const existingKeys = Object.keys(CAPTURED_SCREENS);
+        if (existingKeys.length > 0) {
+          const lastKey = existingKeys[existingKeys.length - 1];
+          const lastScreen = CAPTURED_SCREENS[lastKey];
+          if (lastScreen && Math.abs((lastScreen.html || '').length - (html || '').length) < 80) {
+            const cleanText = s => (s || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+            if (cleanText(lastScreen.html) === cleanText(html)) {
+              console.log('[Snapshot] Reusing existing duplicate screen:', lastKey);
+              return sendJSON(res, { ok: true, screenId: lastKey, duplicate: true, totalScreens: existingKeys.length });
+            }
+          }
+        }
+
         CAPTURED_SCREENS[id] = {
           id,
           name: screenName || 'Screen ' + (Object.keys(CAPTURED_SCREENS).length + 1),
@@ -1128,7 +1211,7 @@ const server = http.createServer((req, res) => {
         if (ACTIVE_DEMO_ID) {
           storage.updateDemo(ACTIVE_DEMO_ID, { screens: CAPTURED_SCREENS });
         }
-        sendJSON(res, { ok: true, screenId: id, totalScreens: Object.keys(CAPTURED_SCREENS).length });
+        sendJSON(res, { ok: true, screenId: id, duplicate: false, totalScreens: Object.keys(CAPTURED_SCREENS).length });
       } catch (e) { sendJSON(res, { ok: false, error: e.message }, 400); }
     });
     return;
@@ -1179,12 +1262,11 @@ const server = http.createServer((req, res) => {
         const reqData = body ? JSON.parse(body) : {};
         const cfg = reqData.config || SAVED_CFG || seedCfg;
 
-        fs.mkdirSync(EXPORT_DIR, { recursive: true });
+        // Derive filename from app name
+        const appName = (cfg.appName || 'demo').trim();
+        const safeName = appName.replace(/[^a-zA-Z0-9_\-\s]/g, '').replace(/\s+/g, '-').toLowerCase() || 'demo';
 
-        // Copy player runtime files
-        fs.copyFileSync(path.join(PLAYER_DIR, 'index.html'), path.join(EXPORT_DIR, 'index.html'));
-        fs.copyFileSync(path.join(PLAYER_DIR, 'player.js'), path.join(EXPORT_DIR, 'player.js'));
-        fs.copyFileSync(path.join(PLAYER_DIR, 'player.css'), path.join(EXPORT_DIR, 'player.css'));
+        fs.mkdirSync(EXPORT_DIR, { recursive: true });
 
         // Prepare screens map
         const screensMap = {};
@@ -1192,7 +1274,79 @@ const server = http.createServer((req, res) => {
           screensMap[id] = s.html;
         }
 
-        // Write demo-package.js
+        // Read player CSS and JS
+        const playerCSS = fs.readFileSync(path.join(PLAYER_DIR, 'player.css'), 'utf8');
+        const playerJS = fs.readFileSync(path.join(PLAYER_DIR, 'player.js'), 'utf8');
+        const pkgJSON = JSON.stringify({ config: cfg, screens: screensMap });
+
+        // Build single self-contained HTML file
+        const singleHtml = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${appName} — Interactive Demo</title>
+  <style>
+${playerCSS}
+  </style>
+  <script>
+/* DemoStudio Export Package */
+window.__DEMO_PACKAGE = ${pkgJSON};
+  </` + `script>
+</head>
+<body>
+  <!-- Top Bar -->
+  <header id="player-topbar">
+    <div class="player-brand">
+      <span class="badge">Interactive Demo</span>
+      <span id="player-app-name">${appName}</span>
+    </div>
+    <div class="player-progress-container">
+      <div class="player-progress-bar">
+        <div id="player-progress-fill" class="player-progress-fill"></div>
+      </div>
+      <span id="player-progress-label">1 / 1</span>
+    </div>
+    <div class="player-top-actions">
+      <button class="player-btn-icon" onclick="DemoStudioPlayer.prev()" title="Previous Step">←</button>
+      <button class="player-btn-icon" onclick="DemoStudioPlayer.next()" title="Next Step">→</button>
+    </div>
+  </header>
+
+  <!-- Viewport -->
+  <main id="player-viewport">
+    <iframe id="player-frame" sandbox="allow-same-origin allow-scripts"></iframe>
+  </main>
+
+  <!-- Spotlight -->
+  <div id="player-spotlight"></div>
+
+  <!-- Hotspot Click Target -->
+  <div id="player-hotspot" class="player-hotspot">
+    <div class="player-hotspot-pulse"></div>
+  </div>
+
+  <!-- Tooltip Card -->
+  <div id="player-card" style="display: none;"></div>
+
+  <!-- Modal -->
+  <div id="player-modal" class="player-modal-backdrop" style="display: none;"></div>
+
+  <script>
+${playerJS}
+  </` + `script>
+</body>
+</html>`;
+
+        // Write the single self-contained HTML file named after the app
+        const htmlFilename = safeName + '-demo.html';
+        const htmlPath = path.join(EXPORT_DIR, htmlFilename);
+        fs.writeFileSync(htmlPath, singleHtml, 'utf8');
+
+        // Also write multi-file export for backwards compatibility
+        fs.copyFileSync(path.join(PLAYER_DIR, 'index.html'), path.join(EXPORT_DIR, 'index.html'));
+        fs.copyFileSync(path.join(PLAYER_DIR, 'player.js'), path.join(EXPORT_DIR, 'player.js'));
+        fs.copyFileSync(path.join(PLAYER_DIR, 'player.css'), path.join(EXPORT_DIR, 'player.css'));
         const pkgContent =
           '/* DemoStudio Standalone Export Package */\n' +
           'window.__DEMO_PACKAGE = ' +
@@ -1200,11 +1354,12 @@ const server = http.createServer((req, res) => {
           ';\n';
         fs.writeFileSync(path.join(EXPORT_DIR, 'demo-package.js'), pkgContent, 'utf8');
 
-        console.log('[Export] Standalone demo successfully bundled to:', EXPORT_DIR);
+        console.log('[Export] Standalone demo exported:', htmlPath);
         sendJSON(res, {
           ok: true,
           exportDir: EXPORT_DIR,
-          indexPath: path.join(EXPORT_DIR, 'index.html'),
+          htmlFile: htmlFilename,
+          indexPath: htmlPath,
           screensCount: Object.keys(screensMap).length
         });
       } catch (e) {
@@ -1214,6 +1369,7 @@ const server = http.createServer((req, res) => {
     });
     return;
   }
+
 
   // ── AI Agent Conversational Tour Chat & Refinement ───────────
   if (url === ROUTE + 'studio/ai-chat' && req.method === 'POST') {
@@ -1314,17 +1470,90 @@ const server = http.createServer((req, res) => {
     req.on('data', c => body += c);
     req.on('end', async () => {
       try {
-        const { dom, url: targetUrl, appName, apiKey, provider, llmEndpoint, llmModel, metaDescription } = JSON.parse(body);
+        const { dom, screens, url: targetUrl, appName, apiKey, provider, llmEndpoint, llmModel, metaDescription } = JSON.parse(body);
         const effectiveKey = apiKey || AI_KEY;
 
         const sample = (dom || []).slice(0, 120);
-        if (!sample.length) {
+        if (!sample.length && (!screens || !screens.length)) {
           return sendJSON(res, { ok: false, error: 'No interactive elements detected on page.' }, 400);
         }
         const endpoint = llmEndpoint || OPENROUTER_URL;
         const candidateModels = llmModel ? [llmModel] : (endpoint.includes('openrouter.ai') ? AI_MODELS : ['default']);
 
-        // If no AI key configured and no local LLM endpoint, use context-aware autonomous heuristics
+        // Multi-page Heuristic Synthesis if multiple screens visited
+        if (screens && screens.length > 1 && (!effectiveKey && !llmEndpoint)) {
+          console.log(`[AI] Generating multi-page tour across ${screens.length} visited screens via autonomous engine.`);
+          const multiChapters = screens.map((sc, idx) => {
+            const scDom = (sc.dom || []).slice(0, 40);
+            const scHeroes = scDom.filter(d => d.zone === 'hero' || ['H1', 'H2'].includes(d.tag));
+            const scActions = scDom.filter(d => d.zone === 'action' || d.tag === 'BUTTON' || d.role === 'button');
+            const scOthers = scDom.filter(d => !scHeroes.includes(d) && !scActions.includes(d));
+
+            const steps = [];
+            const primaryEl = scHeroes[0] || scDom[0];
+            if (primaryEl) {
+              const ctx = inferElementContext(primaryEl, appName);
+              steps.push({
+                title: ctx.title,
+                body: ctx.body,
+                sel: primaryEl.sel,
+                pos: primaryEl.optimalPos || 'bottom',
+                action: false,
+                screenId: sc.screenId
+              });
+            }
+
+            const actionEl = scActions[0] || scOthers[0];
+            if (actionEl && actionEl.sel !== primaryEl?.sel) {
+              const ctx = inferElementContext(actionEl, appName);
+              steps.push({
+                title: ctx.title,
+                body: `Interact with this feature on ${sc.screenName || 'the page'}.`,
+                sel: actionEl.sel,
+                pos: actionEl.optimalPos || 'top',
+                action: true,
+                screenId: sc.screenId
+              });
+            }
+
+            return {
+              title: `Chapter ${idx + 1}: ${sc.screenName || ('Section ' + (idx + 1))}`,
+              steps: steps.length ? steps : [{
+                title: sc.screenName || 'Overview',
+                body: `Explore ${sc.screenName || 'this page'}.`,
+                sel: 'body',
+                pos: 'center',
+                action: false,
+                screenId: sc.screenId
+              }]
+            };
+          });
+
+          // Link transitions across chapters
+          for (let c = 0; c < multiChapters.length - 1; c++) {
+            const nextSc = screens[c + 1];
+            const currSteps = multiChapters[c].steps;
+            if (currSteps.length) {
+              currSteps[currSteps.length - 1].targetScreen = nextSc.screenId;
+              currSteps[currSteps.length - 1].action = true;
+            }
+          }
+
+          const multiCfg = {
+            appName: appName || 'My Application',
+            launchTitle: `Welcome to ${appName || 'Interactive Tour'}`,
+            launchBody: `Explore this guided multi-page walkthrough covering key workflows and sections.`,
+            startLabel: 'Start Interactive Tour',
+            dismissLabel: 'Explore on my own',
+            accent: '#005ac1',
+            chapters: multiChapters
+          };
+
+          SAVED_CFG = multiCfg;
+          return sendJSON(res, { ok: true, config: multiCfg, model: 'autonomous-multipage-engine' });
+        }
+
+        // If no AI key configured and single page, use context-aware autonomous heuristics
         if (!effectiveKey && !llmEndpoint) {
           console.log('[AI] No LLM API key provided; using context-aware autonomous heuristic engine.');
           const heuristicCfg = generateAutonomousHeuristicDemo(sample, appName, targetUrl, metaDescription);
@@ -1619,19 +1848,20 @@ JSON OUTPUT SCHEMA:
 The user just performed a real manual demonstration of the web application "${appName || targetUrl || 'the app'}".
 Below is the exact chronological stream of user interactions, inputs, and screens recorded during their live session:
 
-RECORDED USER DEMO ACTIONS:
+RECORDED USER DEMO ACTIONS (${recordedActions.length} total actions):
 ${actionsSummary}
 
 🎯 YOUR MISSION:
 Transform this user demonstration into a high-converting, professional, multi-chapter interactive guided tour!
-1. Organize the recorded actions into 1 to 3 logical narrative Chapters (e.g. "Chapter 1: Discovery & Navigation", "Chapter 2: Configuration & Workflow").
-2. For EVERY step, maintain the EXACT verbatim "sel", "pos", "screenId", and "targetScreen" from the recorded action.
-3. Write compelling, professional, human-crafted "title" and "body" copy:
+1. MANDATORY REQUIREMENT: You MUST include ALL ${recordedActions.length} recorded actions as steps in the tour in the exact same chronological order. Do NOT skip, omit, summarize away, or merge any recorded action! Every single recorded action (1 through ${recordedActions.length}) MUST have a corresponding step.
+2. Organize these steps into 1 to 3 logical narrative Chapters (e.g. "Chapter 1: Discovery & Navigation", "Chapter 2: Configuration & Workflow"). The sum of steps across all chapters MUST equal ${recordedActions.length}.
+3. For EVERY step, maintain the EXACT verbatim "sel", "pos", "screenId", and "targetScreen" from the recorded action.
+4. Write compelling, professional, human-crafted "title" and "body" copy:
    - Explain what the feature is and why the user interacted with it.
    - For clicks, explain what clicking that element does.
    - For inputs, explain what data is being configured.
    - Always set "action": true so the viewer is prompted to click or continue.
-4. Return STRICT, VALID JSON only conforming to the schema below.
+5. Return STRICT, VALID JSON only conforming to the schema below.
 
 JSON OUTPUT SCHEMA:
 {
@@ -1760,6 +1990,40 @@ JSON OUTPUT SCHEMA:
           });
         });
 
+        // ── GUARANTEE 100% STEP RETENTION ──
+        // Ensure every single recorded action has a step in cfg.chapters.
+        const chapterStepCountBySel = new Map();
+        (cfg.chapters || []).forEach(ch => {
+          (ch.steps || []).forEach(st => {
+            if (st.sel) {
+              chapterStepCountBySel.set(st.sel, (chapterStepCountBySel.get(st.sel) || 0) + 1);
+            }
+          });
+        });
+
+        const missingActions = [];
+        const seenCounts = new Map();
+        for (const act of recordedActions) {
+          if (!act.sel) continue;
+          const seen = (seenCounts.get(act.sel) || 0) + 1;
+          seenCounts.set(act.sel, seen);
+          const inChapters = chapterStepCountBySel.get(act.sel) || 0;
+          if (seen > inChapters) {
+            missingActions.push(act);
+          }
+        }
+
+        if (missingActions.length > 0) {
+          console.log(`[AI Session] Reconciling: ${missingActions.length} recorded actions were missing from LLM response. Appending them.`);
+          if (!cfg.chapters || !cfg.chapters.length) {
+            cfg.chapters = [{ title: 'Workflow & Actions', steps: [] }];
+          }
+          const targetChapter = cfg.chapters[cfg.chapters.length - 1];
+          for (const act of missingActions) {
+            targetChapter.steps.push(actionToStep(act, appName));
+          }
+        }
+
         SAVED_CFG = cfg;
         sendJSON(res, { ok: true, config: cfg, model: usedModel });
       } catch (e) {
@@ -1776,29 +2040,60 @@ JSON OUTPUT SCHEMA:
   if (url === ROUTE + 'snapshot-engine.js') return serveFile(res, SNAPSHOT_JS);
   if (url === ROUTE + 'studio/studio-overlay.js') return serveFile(res, STUDIO_JS);
   if (url === ROUTE + 'studio/studio-overlay.css') return serveFile(res, STUDIO_CSS);
-  if (url === ROUTE + 'welcome' || !UPSTREAM) {
+  if (url === ROUTE + 'welcome') {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end(welcomeHtml());
+    return;
+  }
+  if (!UPSTREAM) {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
     res.end(fs.readFileSync(DASHBOARD_HTML, 'utf8'));
     return;
   }
 
-  const transport = UPSTREAM.protocol === 'https' ? https : http;
+  let proxyPath = req.url;
+  try {
+    const u = new URL(req.url, 'http://localhost');
+    u.searchParams.delete('mode');
+    proxyPath = (u.pathname || '/') + (u.search ? u.search : '') + (u.hash ? u.hash : '');
+  } catch (e) {}
+
+  // High-performance cache for immutable Next.js chunks, stylesheets, fonts, and scripts
+  const isStaticAsset = req.method === 'GET' && (
+    proxyPath.startsWith('/_next/static/') ||
+    /\.(css|woff2?|ttf|eot|svg|png|jpe?g|gif|ico|webp|js)(\?.*)?$/i.test(proxyPath)
+  );
+
+  if (isStaticAsset && STATIC_ASSET_CACHE.has(proxyPath)) {
+    const cached = STATIC_ASSET_CACHE.get(proxyPath);
+    res.writeHead(cached.status, cached.headers);
+    res.end(cached.body);
+    return;
+  }
+
+  const isHttps = UPSTREAM.protocol === 'https';
+  const transport = isHttps ? https : http;
+  const agent = isHttps ? httpsAgent : httpAgent;
+
   const reqHeaders = { ...req.headers };
   reqHeaders.host = UPSTREAM.host + (UPSTREAM.port !== 80 && UPSTREAM.port !== 443 ? ':' + UPSTREAM.port : '');
   delete reqHeaders.origin;
   delete reqHeaders.referer;
+  delete reqHeaders['connection'];
+  // Force identity so upstream always returns uncompressed content.
+  // This is critical for HTML injection and static asset caching.
+  reqHeaders['accept-encoding'] = 'identity';
 
   const proxyReq = transport.request({
     host: UPSTREAM.host,
     port: UPSTREAM.port,
-    servername: UPSTREAM.protocol === 'https' ? UPSTREAM.host : undefined,
+    agent: agent,
+    servername: isHttps ? UPSTREAM.host : undefined,
     rejectUnauthorized: false,
     method: req.method,
-    path: req.url,
-    headers: {
-      ...reqHeaders,
-      'accept-encoding': 'gzip, deflate, br'
-    }
+    path: proxyPath,
+    headers: reqHeaders,
+    timeout: 30000
   }, async proxyRes => {
     // Rewrite redirects to keep user on proxy port
     if (proxyRes.headers.location) {
@@ -1812,7 +2107,32 @@ JSON OUTPUT SCHEMA:
 
     const isHtml = (proxyRes.headers['content-type'] || '').includes('text/html');
     if (!isHtml) {
-      res.writeHead(proxyRes.statusCode, proxyRes.headers);
+      const h = { ...proxyRes.headers };
+      delete h['content-security-policy'];
+      delete h['content-security-policy-report-only'];
+      delete h['x-frame-options'];
+
+      if (isStaticAsset && proxyRes.statusCode === 200) {
+        const chunks = [];
+        proxyRes.on('data', c => chunks.push(c));
+        proxyRes.on('end', () => {
+          const body = Buffer.concat(chunks);
+          if (STATIC_ASSET_CACHE.size < MAX_STATIC_CACHE_ENTRIES) {
+            STATIC_ASSET_CACHE.set(proxyPath, {
+              status: proxyRes.statusCode,
+              headers: h,
+              body: body
+            });
+          }
+          if (!res.headersSent) {
+            res.writeHead(proxyRes.statusCode, h);
+            res.end(body);
+          }
+        });
+        return;
+      }
+
+      res.writeHead(proxyRes.statusCode, h);
       proxyRes.pipe(res);
       return;
     }
@@ -1820,10 +2140,13 @@ JSON OUTPUT SCHEMA:
     const chunks = [];
     proxyRes.on('data', c => chunks.push(c));
     proxyRes.on('end', async () => {
+      let rawBuf = Buffer.alloc(0);
       try {
-        const rawBuf = Buffer.concat(chunks);
+        rawBuf = Buffer.concat(chunks);
         const decBuf = await decompress(rawBuf, proxyRes.headers['content-encoding'] || '');
-        const modified = injectAssets(decBuf.toString('utf8'));
+        let htmlStr = '';
+        try { htmlStr = decBuf.toString('utf8'); } catch(e) { htmlStr = rawBuf.toString('utf8'); }
+        const modified = injectAssets(htmlStr);
         const outBuf = Buffer.from(modified, 'utf8');
 
         const h = { ...proxyRes.headers };
@@ -1837,22 +2160,45 @@ JSON OUTPUT SCHEMA:
         h['content-type'] = 'text/html; charset=utf-8';
         h['content-length'] = outBuf.length;
 
-        res.writeHead(proxyRes.statusCode, h);
-        res.end(outBuf);
+        if (!res.headersSent) {
+          res.writeHead(proxyRes.statusCode, h);
+          res.end(outBuf);
+        }
       } catch (err) {
         console.error('Proxy injection error:', err);
-        res.writeHead(502); res.end('Proxy injection failed: ' + err.message);
+        try {
+          if (!res.headersSent) {
+            res.writeHead(proxyRes.statusCode, { 'content-type': 'text/html; charset=utf-8' });
+            res.end(rawBuf);
+          }
+        } catch(e2) {
+          if (!res.headersSent) {
+            res.writeHead(502); res.end('Proxy injection failed: ' + err.message);
+          }
+        }
       }
     });
   });
 
-  proxyReq.on('error', err => {
-    console.error('Proxy target connection failed:', err.code, err.message);
-    res.writeHead(502, { 'Content-Type': 'text/html' });
-    res.end('<h1>502 Bad Gateway</h1><p>Cannot reach target app at ' + UPSTREAM.url + ' (' + (err.code || err.message) + ')</p>');
+  proxyReq.on('timeout', () => {
+    proxyReq.destroy(new Error('Upstream request timed out'));
   });
 
-  req.pipe(proxyReq);
+  proxyReq.on('error', err => {
+    console.error('Proxy target connection failed:', err.code, err.message);
+    if (!res.headersSent) {
+      res.writeHead(502, { 'Content-Type': 'text/html' });
+      res.end('<h1>502 Bad Gateway</h1><p>Cannot reach target app at ' + (UPSTREAM ? UPSTREAM.url : '') + ' (' + (err.code || err.message) + ')</p>');
+    } else {
+      res.end();
+    }
+  });
+
+  if (req.method === 'GET' || req.method === 'HEAD') {
+    proxyReq.end();
+  } else {
+    req.pipe(proxyReq);
+  }
 });
 
 server.listen(PORT, '0.0.0.0', () => {

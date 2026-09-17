@@ -866,6 +866,12 @@
 
     // Actions
     function editDemo(id) {
+      try {
+        for (let i = localStorage.length - 1; i >= 0; i--) {
+          const k = localStorage.key(i);
+          if (k && (k.startsWith('demostudio_draft') || k.startsWith('demostudio_studio'))) localStorage.removeItem(k);
+        }
+      } catch(e) {}
       location.href = `/__tour/studio/load?id=${encodeURIComponent(id)}`;
     }
 
@@ -938,6 +944,12 @@
         });
         const data = await res.json();
         if (data.ok && data.demo) {
+          try {
+            for (let i = localStorage.length - 1; i >= 0; i--) {
+              const k = localStorage.key(i);
+              if (k && (k.startsWith('demostudio_draft') || k.startsWith('demostudio_studio'))) localStorage.removeItem(k);
+            }
+          } catch(e) {}
           closeCreateModal();
           showToast('Demo created! Launching Studio…');
           setTimeout(() => {

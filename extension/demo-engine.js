@@ -285,37 +285,76 @@
     if (!st.sel && !st.action) return;
 
     actionHandler = (e) => {
-      // Never intercept clicks on card controls or launch modal
+      // Never intercept clicks on card controls or launch modal — let them bubble normally
       if (card && (card === e.target || card.contains(e.target))) return;
       if (launcher && (launcher === e.target || launcher.contains(e.target))) return;
 
+      // Ignore synthetic clicks we dispatched ourselves to avoid infinite loops
+      if (e.__demostudio) return;
+
       const target = findTarget(st.sel);
       let hit = false;
+      let markerClick = false;
+      let directClick = false;
+
       if (target) {
         const r = target.getBoundingClientRect();
         if (r.width > 0 && r.height > 0) {
-          const pad = (CFG.spotPad || 6) + 6;
-          const x = e.clientX, y = e.clientY;
-          if (x >= r.left - pad && x <= r.right + pad && y >= r.top - pad && y <= r.bottom + pad) hit = true;
-          if (!hit && e.composedPath) {
+          // Composed-path check first (handles shadow DOM)
+          if (e.composedPath) {
             const path = e.composedPath();
-            if (path.some(el => el === target || (el instanceof Element && target.contains(el)))) hit = true;
+            if (path.some(el => el === target || (el instanceof Element && target.contains(el)))) {
+              hit = true;
+              directClick = true;
+            }
+          }
+          // Fallback: bounding box
+          if (!hit) {
+            const pad = (CFG.spotPad || 6) + 6;
+            const x = e.clientX, y = e.clientY;
+            if (x >= r.left - pad && x <= r.right + pad && y >= r.top - pad && y <= r.bottom + pad) hit = true;
           }
         }
       }
+
+      // Marker overlay box click — highlight border was clicked, not the real element
       if (e.target === marker || (marker && marker.contains(e.target))) {
         hit = true;
+        markerClick = true;
+        directClick = false;
       }
+
       if (hit) {
-        e.preventDefault();
+        if (markerClick) {
+          // Marker clicked: stop the event and dispatch a synthetic click on the target
+          e.stopPropagation();
+          e.stopImmediatePropagation();
+          detachAction();
+          next();
+          if (target && st.action !== false) {
+            try {
+              target.focus?.();
+              const synth = new MouseEvent('click', { bubbles: true, cancelable: true, clientX: e.clientX, clientY: e.clientY });
+              synth.__demostudio = true;
+              target.dispatchEvent(synth);
+            } catch (err) {}
+          }
+        } else {
+          // Real element clicked directly: advance the demo and let the click reach the element naturally
+          detachAction();
+          next();
+        }
+      } else if (marker && marker.classList.contains('on')) {
+        // Clicked outside the spotlight — block it so dialogs/modals don't close unexpectedly
         e.stopPropagation();
-        detachAction();
-        next();
+        e.stopImmediatePropagation();
+        e.preventDefault();
       }
     };
     document.addEventListener('click', actionHandler, true);
   }
   function detachAction() { if (actionHandler) { document.removeEventListener('click', actionHandler, true); actionHandler = null; } }
+
 
   // ── Lifecycle ────────────────────────────────────────────────
   function start() {
@@ -365,7 +404,6 @@
   $('demostudio-next').addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); next(); });
   $('demostudio-back').addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); prev(); });
   $('demostudio-skip').addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); end(); });
-  marker.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); next(); });
   document.addEventListener('keydown', (e) => {
     if (!running) return;
     if (e.key === 'ArrowRight') next();
@@ -381,6 +419,13 @@
   setTimeout(tryLaunch, CFG.autoDelay);
 
   function tryLaunch() {
+    try {
+      if (new URLSearchParams(window.location.search).get('mode') === 'studio' ||
+          (document.cookie && document.cookie.includes('demostudio_mode=studio')) ||
+          document.getElementById('demostudio-studio')) {
+        return;
+      }
+    } catch (e) {}
     if (CFG.showOnce) { try { if (localStorage.getItem(CFG.storageKey)) return; } catch (e) {} }
     if (CFG.disableOnPaths && CFG.disableOnPaths.some(p => window.location.pathname.includes(p))) return;
     if (CFG.onlyOnPaths && !CFG.onlyOnPaths.some(p => window.location.pathname.includes(p))) return;
